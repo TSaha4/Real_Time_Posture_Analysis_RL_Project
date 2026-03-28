@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "upryt"
+version = "2.0.0"
+description = "Real-Time Posture Analysis with Reinforcement Learning"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.8"
+authors = [
+    {name = "UPRYT Team", email = "info@upryt.com"}
+]
+keywords = ["posture", "reinforcement-learning", "computer-vision", "mediapipe", "health"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: End Users/Desktop",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Human Machine Interfaces",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+]
+
+dependencies = [
+    "opencv-python>=4.8.0",
+    "numpy>=1.24.0",
+    "torch>=2.0.0",
+    "mediapipe>=0.10.0",
+    "Pillow>=10.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+]
+
+[project.scripts]
+upryt = "main:main"
+upryt-gui = "gui_app:main"
+
+[project.urls]
+Homepage = "https://github.com/upryt/posture-analysis"
+Repository = "https://github.com/upryt/posture-analysis"
+Issues = "https://github.com/upryt/posture-analysis/issues"
+
+[tool.setuptools.packages.find]
+exclude = ["tests*", "docs*"]
+
+[tool.setuptools.package-data]
+"* = ["pose_landmarker_lite.task", "logo/*.png"]
+"models/*.pth" = ["models/*.pth"]

@@ -6,30 +6,49 @@ An advanced posture correction system using RL for adaptive feedback.
 
 ## Installation
 
+### Option 1: Install as Package (Recommended)
+```bash
+pip install -e .
+```
+
+### Option 2: Install Dependencies Only
 ```bash
 pip install -r requirements.txt
 ```
 
 ## Quick Start
 
-### 1. Train the RL Agent (Simulation)
+### GUI Application (Recommended)
+Simply double-click `run_app.bat` (Windows) or run:
+```bash
+python gui_app.py
+```
+
+The GUI provides easy access to all features:
+- Real-Time Monitoring (PPO/DQN/Rule-Based)
+- Train RL Agent
+- Compare Algorithms
+
+### Command Line Usage
+
+#### 1. Train the RL Agent (Simulation)
 ```bash
 python main.py --mode train --episodes 500
 ```
 
-### 2. Compare Methods
+#### 2. Compare Methods
 ```bash
 python main.py --mode compare
 ```
 
-### 3. Run Real-Time System
+#### 3. Run Real-Time System
 ```bash
 python main.py --mode realtime
 ```
 
-### 4. Run with Rule-Based (No RL)
+#### 4. Run with Rule-Based (No RL)
 ```bash
-python main.py --mode realtime --no-rl
+python main.py --mode realtime --algorithm rule
 ```
 
 ## Project Structure
