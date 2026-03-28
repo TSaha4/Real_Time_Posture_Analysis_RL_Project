@@ -4,6 +4,7 @@ import threading
 import subprocess
 import sys
 import os
+from PIL import Image, ImageTk
 
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -37,6 +38,17 @@ class UPRYTApplication:
     def _create_header(self):
         header_frame = ttk.Frame(self.root, padding=15)
         header_frame.pack(fill="x")
+        
+        logo_path = os.path.join(PROJECT_DIR, "logo", "upryt_white.png")
+        if os.path.exists(logo_path):
+            try:
+                logo_img = Image.open(logo_path)
+                logo_img = logo_img.resize((50, 50), Image.Resampling.LANCZOS)
+                self.logo_photo = ImageTk.PhotoImage(logo_img)
+                logo_label = tk.Label(header_frame, image=self.logo_photo, bg="#f0f0f0")
+                logo_label.pack(side="left", padx=(0, 15))
+            except Exception:
+                pass
         
         title_label = ttk.Label(header_frame, text="UPRYT", style="Header.TLabel")
         title_label.pack(side="left")
