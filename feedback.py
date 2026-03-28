@@ -30,13 +30,18 @@ class VisualFeedback:
         self.good_color = config.feedback.posture_good_color
         self.bad_color = config.feedback.posture_bad_color
         self.warning_color = config.feedback.posture_warning_color
-        self.info_panel_height = 210
-        self.info_panel_margin = 10
+        self.info_panel_height = 180
+        self.info_panel_width = 350
+        self.info_panel_margin = 15
         self.logo = self._load_logo()
 
     def _load_logo(self):
         import os
-        logo_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logo", "upryt_white.png")
+        script_dir = os.path.dirname(os.path.realpath(__file__))
+        logo_path = os.path.join(script_dir, "logo", "upryt_white.png")
+        if not os.path.exists(logo_path):
+            logo_path = os.path.join(script_dir, "..", "logo", "upryt_white.png")
+        logo_path = os.path.normpath(logo_path)
         if os.path.exists(logo_path):
             try:
                 import cv2
@@ -44,8 +49,9 @@ class VisualFeedback:
                 if logo is not None:
                     if logo.shape[2] == 4:
                         logo = cv2.cvtColor(logo, cv2.COLOR_BGRA2BGR)
-                    return cv2.resize(logo, (120, 40))
-            except:
+                    return cv2.resize(logo, (100, 30))
+            except Exception as e:
+                print(f"Logo load error: {e}")
                 pass
         return None
 
@@ -59,34 +65,45 @@ class VisualFeedback:
     def _create_info_panel(self, frame_shape: Tuple, posture_label: str, posture_score: float,
                           action_taken: str, metrics: Dict, suggestion: str = "") -> np.ndarray:
         h, w = frame_shape[:2]
-        panel = np.zeros((self.info_panel_height + 30, w, 3), dtype=np.uint8)
+        panel_w = self.info_panel_width
+        panel_h = self.info_panel_height
+        panel = np.zeros((panel_h, panel_w, 3), dtype=np.uint8)
+        
+        cv2.rectangle(panel, (0, 0), (panel_w, panel_h), (30, 30, 30), -1)
+        cv2.rectangle(panel, (0, 0), (panel_w, panel_h), (100, 100, 100), 2)
+        
         score_color = self._get_score_color(posture_score)
-        if self.logo is not None:
-            logo_x = w - self.logo.shape[1] - 20
-            panel[5:5+self.logo.shape[0], logo_x:logo_x+self.logo.shape[1]] = self.logo
-        cv2.putText(panel, f"Posture: {posture_label.upper()}", (self.info_panel_margin, 30),
-                   self.font, 0.7, score_color, 2)
-        bar_width = 200
-        bar_height = 20
-        bar_x = self.info_panel_margin
-        bar_y = 45
+        
+        cv2.putText(panel, f"Posture: {posture_label.upper()}", (10, 28),
+                   self.font, 0.6, score_color, 2)
+        bar_width = 150
+        bar_height = 16
+        bar_x = 10
+        bar_y = 40
         self._draw_score_bar(panel, posture_score, bar_x, bar_y, bar_width, bar_height)
-        cv2.putText(panel, f"Score: {posture_score:.2f}", (bar_x + bar_width + 20, bar_y + 15),
-                   self.font, 0.5, (255, 255, 255), 1)
-        cv2.putText(panel, f"Action: {action_taken}", (self.info_panel_margin, 90),
-                   self.font, 0.6, (200, 200, 200), 1)
+        cv2.putText(panel, f"{posture_score:.0%}", (bar_x + bar_width + 8, bar_y + 13),
+                   self.font, 0.45, (255, 255, 255), 1)
         
+        cv2.putText(panel, f"Action: {action_taken}", (10, 70),
+                   self.font, 0.5, (200, 200, 200), 1)
+        
+        y_offset = 95
         if suggestion:
-            cv2.putText(panel, f"Suggestion: {suggestion}", (self.info_panel_margin, 125),
-                       self.font, 0.5, (255, 200, 100), 1)
-            y_offset = 145
-        else:
-            y_offset = 115
+            suggestion_text = suggestion[:35] + "..." if len(suggestion) > 35 else suggestion
+            cv2.putText(panel, suggestion_text, (10, y_offset),
+                       self.font, 0.45, (255, 200, 100), 1)
+            y_offset += 22
         
-        for key, value in list(metrics.items())[:4]:
-            text = f"{key}: {value:.2f}" if isinstance(value, float) else f"{key}: {value}"
-            cv2.putText(panel, text, (self.info_panel_margin, y_offset), self.font, 0.5, (180, 180, 180), 1)
-            y_offset += 20
+        for key, value in list(metrics.items())[:3]:
+            text = f"{key}: {value}"
+            cv2.putText(panel, text, (10, y_offset), self.font, 0.4, (160, 160, 160), 1)
+            y_offset += 18
+        
+        if self.logo is not None:
+            logo_x = panel_w - self.logo.shape[1] - 10
+            logo_y = panel_h - self.logo.shape[1] - 10
+            panel[logo_y:logo_y+self.logo.shape[0], logo_x:logo_x+self.logo.shape[1]] = self.logo
+        
         return panel
 
     def _draw_score_bar(self, panel: np.ndarray, score: float, x: int, y: int, width: int, height: int):
@@ -107,9 +124,17 @@ class VisualFeedback:
         return self.bad_color
 
     def _blend_panel(self, frame: np.ndarray, panel: np.ndarray) -> np.ndarray:
-        panel_alpha = 0.85
-        frame[:self.info_panel_height] = cv2.addWeighted(
-            frame[:self.info_panel_height], 1 - panel_alpha, panel, panel_alpha, 0)
+        panel_alpha = 0.9
+        h, w = frame.shape[:2]
+        panel_h, panel_w = panel.shape[:2]
+        
+        margin = 15
+        x = w - panel_w - margin
+        y = margin
+        
+        roi = frame[y:y+panel_h, x:x+panel_w]
+        blended = cv2.addWeighted(roi, 1 - panel_alpha, panel, panel_alpha, 0)
+        frame[y:y+panel_h, x:x+panel_w] = blended
         return frame
 
     def draw_skeleton_colored(self, frame: np.ndarray, keypoints: Dict, score: float) -> np.ndarray:

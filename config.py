@@ -14,10 +14,10 @@ class PoseConfig:
 
 @dataclass
 class PostureConfig:
-    neck_angle_threshold: float = 15.0
-    shoulder_diff_threshold: float = 15.0
-    spine_inclination_threshold: float = 10.0
-    forward_head_threshold: float = 20.0
+    neck_angle_threshold: float = 20.0
+    shoulder_diff_threshold: float = 20.0
+    spine_inclination_threshold: float = 15.0
+    forward_head_threshold: float = 25.0
     score_weights: dict = field(default_factory=lambda: {
         "neck_angle": 0.3,
         "shoulder_align": 0.25,

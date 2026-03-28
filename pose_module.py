@@ -246,15 +246,27 @@ class PoseAnalyzer:
         key_landmarks = self.detector.get_key_landmarks(keypoints)
         if not key_landmarks:
             return None
+        
         shoulders = {k: key_landmarks[k] for k in ["left_shoulder", "right_shoulder"]}
         hips = {k: key_landmarks[k] for k in ["left_hip", "right_hip"]}
         nose = key_landmarks["nose"]
+        
+        shoulder_mid_y = (shoulders["left_shoulder"]["y"] + shoulders["right_shoulder"]["y"]) / 2
+        torso_height = abs(shoulder_mid_y - hips["left_hip"]["y"])
+        
+        forward_head = nose["y"] - shoulder_mid_y
+        
+        if torso_height > 0:
+            forward_head_normalized = (forward_head / torso_height) * 100
+        else:
+            forward_head_normalized = forward_head
+        
         return {
             "neck_angle": self.compute_neck_angle(nose, shoulders),
             "shoulder_diff": self.compute_shoulder_diff(shoulders),
             "shoulder_alignment": self.compute_shoulder_alignment(shoulders),
             "spine_inclination": self.compute_spine_inclination(shoulders, hips),
-            "forward_head_y": nose["y"] - (shoulders["left_shoulder"]["y"] + shoulders["right_shoulder"]["y"]) / 2,
+            "forward_head_y": forward_head_normalized,
         }
 
 
@@ -263,7 +275,11 @@ if __name__ == "__main__":
     if not cap.isOpened():
         print("Cannot open webcam")
         exit(1)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    cap.set(cv2.CAP_PROP_FPS, 30)
     analyzer = PoseAnalyzer()
+    cv2.namedWindow("Pose Detection", cv2.WINDOW_NORMAL)
     print("Starting pose detection... Press 'q' to quit")
     while True:
         ret, frame = cap.read()

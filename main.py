@@ -25,7 +25,7 @@ class PostureSystem:
         self.cap_side = None
         self.pose_detector = None
         self.pose_analyzer = None
-        self.classifier = PostureClassifier()
+        self.classifier = RuleBasedClassifier()
         self.feedback = VisualFeedback()
         self.rl_agent = None
         self.rule_env = RuleBasedEnvironment()
@@ -42,6 +42,7 @@ class PostureSystem:
         self.current_label = PostureLabel.UNKNOWN
         self.current_score = 0.0
         self.current_suggestion = ""
+        self.current_action_name = "no_feedback"
         self.online_learning_buffer = []
         self.online_learning_counter = 0
         
@@ -74,8 +75,8 @@ class PostureSystem:
         if not self.cap.isOpened():
             print(f"Cannot open camera {self.camera_id}")
             return False
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         self.cap.set(cv2.CAP_PROP_FPS, 30)
         print(f"System initialized with {self.algorithm.upper()} agent")
         return True
@@ -97,6 +98,9 @@ class PostureSystem:
         print(f"\n{'='*60}\nCALIBRATION PHASE\n{'='*60}")
         print(f"Position yourself in good posture. Keep still for ~{self.calibration_target} frames.")
         print("Press 'c' to capture and continue, 'q' to quit\n")
+        
+        cv2.namedWindow(config.feedback.window_name, cv2.WINDOW_NORMAL)
+        
         calibration_frame_count = 0
         frame_timestamp = 0
         start_time = time.time()
@@ -170,8 +174,11 @@ class PostureSystem:
                 features = self.pose_analyzer.compute_posture_features(keypoints)
                 if features and self.baseline:
                     features = self._adjust_features_relative_to_baseline(features)
-                    self.current_label, self.current_score = self.classifier.classify(features)
-                    self.current_suggestion = self.classifier.get_suggestion(self.current_label, features)
+                    new_label, new_score = self.classifier.classify(features)
+                    if new_label != self.current_label:
+                        self.current_label = new_label
+                        self.current_suggestion = self.classifier.get_suggestion(self.current_label, features)
+                    self.current_score = new_score
                 else:
                     self.current_label, self.current_score = PostureLabel.UNKNOWN, 0.0
                     self.current_suggestion = "Calibration needed"
@@ -181,7 +188,6 @@ class PostureSystem:
                 self.current_label, self.current_score = PostureLabel.UNKNOWN, 0.0
                 self.current_suggestion = "No pose detected"
             action = 0
-            action_name = "no_feedback"
             if self.current_time - self.last_decision_time >= config.system.decision_interval:
                 self.last_decision_time = self.current_time
                 if self.algorithm == "rule":
@@ -191,14 +197,14 @@ class PostureSystem:
                     if self.enable_online_learning and self.rl_agent:
                         self._online_learning_update(action)
                 if self.rl_agent:
-                    action_name = self.rl_agent.get_action_name(action)
+                    self.current_action_name = self.rl_agent.get_action_name(action)
                 else:
-                    action_name = Action(action).name
+                    self.current_action_name = Action(action).name
                 
                 if self.enable_audio and action != 0:
                     self._play_audio_alert(action)
             
-            frame = self._draw_overlay(frame, action_name)
+            frame = self._draw_overlay(frame, self.current_action_name)
             if action != 0:
                 self.session_logger.log_frame(self.current_score, action, 0)
             cv2.imshow(config.feedback.window_name, frame)
@@ -235,9 +241,12 @@ class PostureSystem:
     def _adjust_features_relative_to_baseline(self, features: dict) -> dict:
         adjusted = features.copy()
         if self.baseline:
-            adjusted["neck_angle"] = features.get("neck_angle", 90) - self.baseline.get("neck_angle", 90) + 90
-            adjusted["shoulder_diff"] = abs(features.get("shoulder_diff", 0) - self.baseline.get("shoulder_diff", 0))
-            adjusted["spine_inclination"] = abs(features.get("spine_inclination", 0) - self.baseline.get("spine_inclination", 0))
+            base_features = self.pose_analyzer.compute_posture_features(self.baseline)
+            if base_features:
+                adjusted["neck_angle"] = features.get("neck_angle", 90) - base_features.get("neck_angle", 90) + 90
+                adjusted["shoulder_diff"] = abs(features.get("shoulder_diff", 0) - base_features.get("shoulder_diff", 0))
+                adjusted["spine_inclination"] = features.get("spine_inclination", 0) - base_features.get("spine_inclination", 0)
+                adjusted["forward_head_y"] = features.get("forward_head_y", 0) - base_features.get("forward_head_y", 0)
         return adjusted
 
     def _draw_overlay(self, frame: np.ndarray, action_name: str) -> np.ndarray:

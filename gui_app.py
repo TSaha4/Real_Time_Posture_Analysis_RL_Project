@@ -13,8 +13,8 @@ class UPRYTApplication:
     def __init__(self, root):
         self.root = root
         self.root.title("UPRYT - Posture Analysis System")
-        self.root.geometry("700x600")
-        self.root.resizable(False, False)
+        self.root.geometry("800x650")
+        self.root.resizable(True, True)
         self.process = None
         self.is_running = False
         

@@ -209,37 +209,61 @@ class RuleBasedClassifier:
         self.baseline = baseline
 
     @staticmethod
+    def get_suggestion(label: PostureLabel, features: Dict) -> str:
+        import random
+        if label == PostureLabel.UNKNOWN:
+            return "No pose detected"
+        if label == PostureLabel.GOOD:
+            return random.choice(["Great posture! Keep it up!", "Perfect! Stay aligned", "Excellent form!"])
+        
+        if label == PostureLabel.FORWARD_HEAD:
+            forward_val = features.get("forward_head_y", 0)
+            if forward_val > 30:
+                return "CRITICAL: Move head back NOW"
+            elif forward_val > 20:
+                return "Head is drifting forward - bring it back"
+            return "Tuck your chin in"
+        
+        if label == PostureLabel.SLOUCHING:
+            spine = abs(features.get("spine_inclination", 0))
+            if spine > 20:
+                return "Your spine is curved! Straighten up!"
+            return "Lift your chest, roll shoulders back"
+        
+        if label == PostureLabel.LEANING:
+            return "Sit upright, don't lean"
+        
+        return "Adjust your posture"
+
+    @staticmethod
     def classify(features: Dict) -> Tuple[PostureLabel, float]:
         if not features:
             return PostureLabel.UNKNOWN, 0.0
-        score = 0
-        count = 0
+        
         neck = features.get("neck_angle", 90)
-        if 85 <= neck <= 95:
-            score += 1
-        count += 1
-        shoulder_diff = features.get("shoulder_diff", 0)
-        if shoulder_diff < config.posture.shoulder_diff_threshold:
-            score += 1
-        count += 1
+        shoulder_diff = features.get("shoulder_diff", 100)
         spine = features.get("spine_inclination", 0)
-        if abs(spine) < config.posture.spine_inclination_threshold:
-            score += 1
-        count += 1
         forward = features.get("forward_head_y", 0)
-        if forward < config.posture.forward_head_threshold:
-            score += 1
-        count += 1
-        normalized_score = score / count if count > 0 else 0.0
-        if score >= 3:
+        
+        neck_score = max(0, 1 - abs(neck - 90) / config.posture.neck_angle_threshold)
+        shoulder_score = max(0, 1 - shoulder_diff / config.posture.shoulder_diff_threshold)
+        spine_score = max(0, 1 - abs(spine) / config.posture.spine_inclination_threshold)
+        forward_score = max(0, 1 - forward / config.posture.forward_head_threshold)
+        
+        avg_score = (neck_score + shoulder_score + spine_score + forward_score) / 4
+        
+        if avg_score >= 0.65:
             label = PostureLabel.GOOD
-        elif score == 2:
-            label = PostureLabel.SLOUCHING
-        elif forward >= config.posture.forward_head_threshold:
+        elif forward > config.posture.forward_head_threshold:
             label = PostureLabel.FORWARD_HEAD
-        else:
+        elif abs(spine) > config.posture.spine_inclination_threshold * 0.8:
             label = PostureLabel.LEANING
-        return label, normalized_score
+        elif neck_score < 0.6 or shoulder_score < 0.6:
+            label = PostureLabel.SLOUCHING
+        else:
+            label = PostureLabel.GOOD
+        
+        return label, avg_score
 
 
 def encode_label(label: PostureLabel) -> int:
