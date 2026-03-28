@@ -30,7 +30,7 @@ class VisualFeedback:
         self.good_color = config.feedback.posture_good_color
         self.bad_color = config.feedback.posture_bad_color
         self.warning_color = config.feedback.posture_warning_color
-        self.info_panel_height = 180
+        self.info_panel_height = 210
         self.info_panel_margin = 10
         self.logo = self._load_logo()
 
@@ -50,16 +50,16 @@ class VisualFeedback:
         return None
 
     def draw_overlay(self, frame: np.ndarray, posture_label: str, posture_score: float,
-                    action_taken: str, metrics: Dict) -> np.ndarray:
+                    action_taken: str, metrics: Dict, suggestion: str = "") -> np.ndarray:
         output = frame.copy()
-        panel = self._create_info_panel(frame.shape, posture_label, posture_score, action_taken, metrics)
+        panel = self._create_info_panel(frame.shape, posture_label, posture_score, action_taken, metrics, suggestion)
         output = self._blend_panel(output, panel)
         return output
 
     def _create_info_panel(self, frame_shape: Tuple, posture_label: str, posture_score: float,
-                          action_taken: str, metrics: Dict) -> np.ndarray:
+                          action_taken: str, metrics: Dict, suggestion: str = "") -> np.ndarray:
         h, w = frame_shape[:2]
-        panel = np.zeros((self.info_panel_height, w, 3), dtype=np.uint8)
+        panel = np.zeros((self.info_panel_height + 30, w, 3), dtype=np.uint8)
         score_color = self._get_score_color(posture_score)
         if self.logo is not None:
             logo_x = w - self.logo.shape[1] - 20
@@ -75,7 +75,14 @@ class VisualFeedback:
                    self.font, 0.5, (255, 255, 255), 1)
         cv2.putText(panel, f"Action: {action_taken}", (self.info_panel_margin, 90),
                    self.font, 0.6, (200, 200, 200), 1)
-        y_offset = 115
+        
+        if suggestion:
+            cv2.putText(panel, f"Suggestion: {suggestion}", (self.info_panel_margin, 125),
+                       self.font, 0.5, (255, 200, 100), 1)
+            y_offset = 145
+        else:
+            y_offset = 115
+        
         for key, value in list(metrics.items())[:4]:
             text = f"{key}: {value:.2f}" if isinstance(value, float) else f"{key}: {value}"
             cv2.putText(panel, text, (self.info_panel_margin, y_offset), self.font, 0.5, (180, 180, 180), 1)

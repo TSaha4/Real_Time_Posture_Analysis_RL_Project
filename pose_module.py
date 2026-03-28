@@ -8,6 +8,13 @@ from typing import Optional, Dict, Tuple, List
 from config import config
 
 
+MODEL_FILES = {
+    "lite": "pose_landmarker_lite.task",
+    "full": "pose_landmarker.task",
+    "heavy": "pose_landmarker_heavy.task",
+}
+
+
 class PoseDetector:
     LANDMARKS = {
         "nose": 0, "left_eye_inner": 1, "left_eye": 2, "left_eye_outer": 3,
@@ -23,16 +30,25 @@ class PoseDetector:
 
     KEY_LANDMARKS = ["nose", "left_shoulder", "right_shoulder", "left_hip", "right_hip"]
 
-    def __init__(self):
-        base_options = python.BaseOptions(model_asset_path="pose_landmarker_lite.task")
+    def __init__(self, model_size: str = "lite", enable_holistic: bool = False):
+        model_file = MODEL_FILES.get(model_size, MODEL_FILES["lite"])
+        
         options = vision.PoseLandmarkerOptions(
-            base_options=base_options,
+            base_options=python.BaseOptions(model_asset_path=model_file),
             running_mode=vision.RunningMode.VIDEO,
             min_pose_detection_confidence=config.pose.min_detection_confidence,
             min_pose_presence_confidence=config.pose.min_tracking_confidence,
             min_tracking_confidence=config.pose.min_tracking_confidence,
+            output_segmentation_masks=False,
         )
+        
+        if enable_holistic:
+            options.num_poses = 1
+            options.output_segmentation_masks = False
+            
         self.detector = vision.PoseLandmarker.create_from_options(options)
+        self.model_size = model_size
+        self.enable_holistic = enable_holistic
 
     def detect(self, frame: np.ndarray, timestamp_ms: int = 0) -> Optional[Dict]:
         image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -91,6 +107,70 @@ class PoseDetector:
                 pt = (int(keypoints[name]["x"]), int(keypoints[name]["y"]))
                 cv2.circle(frame, pt, 5, color, -1)
         return frame
+
+
+class HolisticPoseDetector:
+    def __init__(self, model_complexity: int = 1):
+        self.mp_holistic = mp.solutions.holistic
+        self.holistic = self.mp_holistic.Holistic(
+            static_image_mode=False,
+            model_complexity=model_complexity,
+            enable_segmentation=False,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5,
+        )
+        self.face_landmarks = None
+        self.left_hand_landmarks = None
+        self.right_hand_landmarks = None
+
+    def detect(self, frame: np.ndarray) -> Optional[Dict]:
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = self.holistic.process(rgb_frame)
+        
+        keypoints = {}
+        
+        if results.pose_landmarks:
+            for idx, landmark in enumerate(results.pose_landmarks.landmark):
+                name = list(PoseDetector.LANDMARKS.keys())[idx] if idx < len(PoseDetector.LANDMARKS) else f"pose_{idx}"
+                keypoints[name] = {
+                    "x": landmark.x * frame.shape[1],
+                    "y": landmark.y * frame.shape[0],
+                    "z": landmark.z * frame.shape[1],
+                    "norm_x": landmark.x,
+                    "norm_y": landmark.y,
+                    "norm_z": landmark.z,
+                }
+            self.face_landmarks = results.face_landmarks
+            self.left_hand_landmarks = results.left_hand_landmarks
+            self.right_hand_landmarks = results.right_hand_landmarks
+        
+        return keypoints if keypoints else None
+
+    def draw_skeleton(self, frame: np.ndarray, keypoints: Dict, color: Tuple[int, int, int] = (0, 255, 0)) -> np.ndarray:
+        output = PoseDetector.draw_skeleton(self, frame, keypoints, color)
+        
+        if self.face_landmarks:
+            for landmark in self.face_landmarks.landmark[::5]:
+                x, y = int(landmark.x * frame.shape[1]), int(landmark.y * frame.shape[0])
+                cv2.circle(output, (x, y), 2, (255, 200, 0), -1)
+        
+        if self.left_hand_landmarks:
+            for landmark in self.left_hand_landmarks.landmark:
+                x, y = int(landmark.x * frame.shape[1]), int(landmark.y * frame.shape[0])
+                cv2.circle(output, (x, y), 3, (0, 200, 255), -1)
+        
+        if self.right_hand_landmarks:
+            for landmark in self.right_hand_landmarks.landmark:
+                x, y = int(landmark.x * frame.shape[1]), int(landmark.y * frame.shape[0])
+                cv2.circle(output, (x, y), 3, (0, 200, 255), -1)
+        
+        return output
+
+    def get_hand_position(self) -> Dict:
+        return {
+            "left_hand": self.left_hand_landmarks,
+            "right_hand": self.right_hand_landmarks,
+        }
 
 
 class PoseCalibrator:

@@ -26,6 +26,34 @@ class PostureResult:
     confidence: float
     features: Dict[str, float]
     details: Dict[str, any]
+    suggestion: str = ""
+
+
+POSTURE_SUGGESTIONS = {
+    PostureLabel.GOOD: [
+        "Great posture! Keep it up!",
+        "You're sitting beautifully.",
+        "Perfect alignment - well done!",
+    ],
+    PostureLabel.SLOUCHING: [
+        "Sit up straight - roll your shoulders back",
+        "Engage your core and straighten your spine",
+        "Don't slouch - lift your chest and pull shoulders back",
+        "Imagine a string pulling you up from the crown of your head",
+    ],
+    PostureLabel.FORWARD_HEAD: [
+        "Move your head back - your ears should align with shoulders",
+        "Chin up! Pull your head back slightly",
+        "Extend your neck backwards gently",
+        "Screen should be at eye level - lower it or raise your chair",
+    ],
+    PostureLabel.LEANING: [
+        "Sit back in your chair evenly",
+        "Keep your weight balanced on both hips",
+        "Center yourself on your seat",
+        "Avoid leaning to one side - distribute weight equally",
+    ],
+}
 
 
 class PostureClassifier:
@@ -37,13 +65,44 @@ class PostureClassifier:
     def set_baseline(self, baseline: Dict):
         self.baseline = baseline
 
+    def get_suggestion(self, label: PostureLabel, features: Dict) -> str:
+        import random
+        if label == PostureLabel.UNKNOWN or label == PostureLabel.GOOD:
+            return random.choice(POSTURE_SUGGESTIONS[PostureLabel.GOOD]) if label == PostureLabel.GOOD else "No pose detected"
+        
+        suggestions = POSTURE_SUGGESTIONS.get(label, ["Adjust your posture"])
+        
+        if label == PostureLabel.FORWARD_HEAD:
+            forward_val = features.get("forward_head_y", 0)
+            if forward_val > 30:
+                suggestions = ["CRITICAL: Move head back NOW - severe forward head posture", "Head is way too forward - pull back immediately!"]
+            elif forward_val > 20:
+                suggestions = ["Head is drifting forward - bring it back", "Your chin is poking out - tuck it in"]
+        
+        elif label == PostureLabel.SLOUCHING:
+            spine = abs(features.get("spine_inclination", 0))
+            if spine > 20:
+                suggestions = ["Your spine is curved! Straighten up immediately!", "Major slouch detected - sit up tall!"]
+            elif spine > 10:
+                suggestions = ["Slight slouch - lift your chest", "Roll your shoulders back"]
+        
+        elif label == PostureLabel.LEANING:
+            shoulder_diff = features.get("shoulder_diff", 0)
+            if shoulder_diff > 25:
+                suggestions = ["You're leaning heavily to one side!", "Shift your weight to center"]
+            elif shoulder_diff > 15:
+                suggestions = ["Slight lean detected - balance your weight", "Even out your hips"]
+        
+        return random.choice(suggestions)
+
     def classify(self, features: Dict) -> Tuple[PostureLabel, float]:
         if not features or not self.baseline:
             return PostureLabel.UNKNOWN, 0.0
         scores = self._compute_posture_scores(features)
         total_score = self._compute_weighted_score(scores)
         label = self._determine_label(features, scores)
-        result = PostureResult(label=label, score=total_score, confidence=self._compute_confidence(scores), features=features, details=scores)
+        suggestion = self.get_suggestion(label, features)
+        result = PostureResult(label=label, score=total_score, confidence=self._compute_confidence(scores), features=features, details=scores, suggestion=suggestion)
         self._add_to_history(result)
         return label, total_score
 

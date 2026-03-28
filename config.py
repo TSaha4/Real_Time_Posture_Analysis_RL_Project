@@ -75,6 +75,40 @@ class FeedbackConfig:
     popup_enabled: bool = False
 
 
+@dataclass
+class AudioConfig:
+    enabled: bool = False
+    volume: float = 0.7
+    cooldown: float = 3.0
+    voice_enabled: bool = False
+    fatigue_threshold: int = 10
+
+
+@dataclass
+class MultiCameraConfig:
+    enabled: bool = False
+    camera_ids: List[int] = field(default_factory=lambda: [0, 1])
+    fusion_method: str = "weighted"
+
+
+@dataclass
+class OnlineLearningConfig:
+    enabled: bool = False
+    update_frequency: int = 100
+    batch_size: int = 32
+    learning_rate: float = 0.0001
+    store_experience: bool = True
+
+
+@dataclass
+class PoseModelConfig:
+    model_type: str = "pose_landmarker"
+    use_holistic: bool = False
+    use_movenet: bool = False
+    enable_face: bool = True
+    enable_hands: bool = False
+
+
 class Config:
     pose = PoseConfig()
     posture = PostureConfig()
@@ -82,6 +116,10 @@ class Config:
     system = SystemConfig()
     reward = RewardConfig()
     feedback = FeedbackConfig()
+    audio = AudioConfig()
+    multi_camera = MultiCameraConfig()
+    online_learning = OnlineLearningConfig()
+    pose_model = PoseModelConfig()
 
     @classmethod
     def create_dirs(cls):

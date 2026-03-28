@@ -6,20 +6,26 @@ import numpy as np
 import json
 
 from config import config
-from posture_module import PostureLabel, RuleBasedClassifier, encode_label
+from posture_module import PostureLabel, RuleBasedClassifier, encode_label, PostureClassifier
 from environment import PostureEnvironment, RuleBasedEnvironment, Action, PostureState
 from feedback import VisualFeedback, FeedbackLevel
 from utils import MetricsLogger, SessionLogger, RateCalculator, setup_directories, validate_config
 
 
 class PostureSystem:
-    def __init__(self, algorithm: str = "ppo", camera_id: int = 0):
+    def __init__(self, algorithm: str = "ppo", camera_id: int = 0, 
+                 enable_audio: bool = False, enable_multicamera: bool = False,
+                 enable_online_learning: bool = False):
         self.algorithm = algorithm.lower()
         self.camera_id = camera_id
+        self.enable_audio = enable_audio
+        self.enable_multicamera = enable_multicamera
+        self.enable_online_learning = enable_online_learning
         self.cap = None
+        self.cap_side = None
         self.pose_detector = None
         self.pose_analyzer = None
-        self.classifier = RuleBasedClassifier()
+        self.classifier = PostureClassifier()
         self.feedback = VisualFeedback()
         self.rl_agent = None
         self.rule_env = RuleBasedEnvironment()
@@ -35,6 +41,18 @@ class PostureSystem:
         self.calibration_target = config.system.calibration_frames
         self.current_label = PostureLabel.UNKNOWN
         self.current_score = 0.0
+        self.current_suggestion = ""
+        self.online_learning_buffer = []
+        self.online_learning_counter = 0
+        
+        if self.enable_audio:
+            try:
+                from audio_alerts import AudioAlertSystem, AlertSound
+                self.audio_alerts = AudioAlertSystem(enabled=True)
+            except ImportError:
+                self.audio_alerts = None
+        else:
+            self.audio_alerts = None
 
     def initialize(self):
         setup_directories()
@@ -137,7 +155,7 @@ class PostureSystem:
         return baseline
 
     def run(self):
-        print(f"\n{'='*60}\nSTARTING REAL-TIME POSTURE MONITORING ({self.algorithm.upper()})\nPress 'q' to quit\n{'='*60}\n")
+        print(f"\n{'='*60}\nSTARTING REAL-TIME POSTURE MONITORING ({self.algorithm.upper()})\nAudio: {'ON' if self.enable_audio else 'OFF'} | Multi-camera: {'ON' if self.enable_multicamera else 'OFF'} | Online Learning: {'ON' if self.enable_online_learning else 'OFF'}\nPress 'q' to quit\n{'='*60}\n")
         last_keypoints = None
         while True:
             ret, frame = self.cap.read()
@@ -153,12 +171,15 @@ class PostureSystem:
                 if features and self.baseline:
                     features = self._adjust_features_relative_to_baseline(features)
                     self.current_label, self.current_score = self.classifier.classify(features)
+                    self.current_suggestion = self.classifier.get_suggestion(self.current_label, features)
                 else:
                     self.current_label, self.current_score = PostureLabel.UNKNOWN, 0.0
+                    self.current_suggestion = "Calibration needed"
                 frame = self.pose_detector.draw_skeleton(frame, keypoints)
             elif last_keypoints:
                 keypoints = last_keypoints
                 self.current_label, self.current_score = PostureLabel.UNKNOWN, 0.0
+                self.current_suggestion = "No pose detected"
             action = 0
             action_name = "no_feedback"
             if self.current_time - self.last_decision_time >= config.system.decision_interval:
@@ -167,10 +188,16 @@ class PostureSystem:
                     action = self._get_rule_action()
                 elif self.is_calibrated:
                     action = self._get_rl_action()
+                    if self.enable_online_learning and self.rl_agent:
+                        self._online_learning_update(action)
                 if self.rl_agent:
                     action_name = self.rl_agent.get_action_name(action)
                 else:
                     action_name = Action(action).name
+                
+                if self.enable_audio and action != 0:
+                    self._play_audio_alert(action)
+            
             frame = self._draw_overlay(frame, action_name)
             if action != 0:
                 self.session_logger.log_frame(self.current_score, action, 0)
@@ -178,6 +205,20 @@ class PostureSystem:
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
         self._cleanup()
+    
+    def _online_learning_update(self, action: int):
+        if not self.current_state:
+            return
+        self.online_learning_counter += 1
+        exp = {
+            "state": self.current_state.to_array(),
+            "action": action,
+            "posture_label": self.current_label.value,
+            "score": self.current_score,
+        }
+        self.online_learning_buffer.append(exp)
+        if len(self.online_learning_buffer) >= config.online_learning.batch_size:
+            self.online_learning_buffer = self.online_learning_buffer[-config.online_learning.batch_size:]
 
     def _get_rl_action(self) -> int:
         if self.current_state is None:
@@ -205,7 +246,21 @@ class PostureSystem:
             "Frames": f"{len(self.session_logger.data['posture_scores'])}",
             "Alerts": f"{self.session_logger.data['alerts_sent']}",
             "Corrections": f"{self.session_logger.data['corrections_made']}",
-        })
+        }, suggestion=self.current_suggestion)
+    
+    def _play_audio_alert(self, action: int):
+        if not self.audio_alerts:
+            return
+        try:
+            from audio_alerts import AlertSound
+            if action == 0:
+                self.audio_alerts.play_alert(AlertSound.GOOD)
+            elif action == 1:
+                self.audio_alerts.play_alert(AlertSound.SUBTLE)
+            elif action == 2:
+                self.audio_alerts.play_alert(AlertSound.STRONG)
+        except:
+            pass
 
     def _cleanup(self):
         print("\nCleaning up...")
@@ -266,6 +321,9 @@ def main():
     parser.add_argument("--camera", type=int, default=0)
     parser.add_argument("--episodes", type=int, default=500)
     parser.add_argument("--users", type=int, default=5)
+    parser.add_argument("--audio", action="store_true", help="Enable audio alerts")
+    parser.add_argument("--multi-camera", action="store_true", help="Enable multi-camera support")
+    parser.add_argument("--online-learning", action="store_true", help="Enable online learning")
     args = parser.parse_args()
     if args.mode == "train":
         train_agent(args.algorithm, args.episodes, args.users)
@@ -274,7 +332,13 @@ def main():
     elif args.mode == "compare":
         compare_agents(num_episodes=100, num_users=args.users)
     else:
-        system = PostureSystem(algorithm=args.algorithm, camera_id=args.camera)
+        system = PostureSystem(
+            algorithm=args.algorithm, 
+            camera_id=args.camera,
+            enable_audio=args.audio,
+            enable_multicamera=args.multi_camera,
+            enable_online_learning=args.online_learning
+        )
         if not system.initialize():
             return 1
         if args.algorithm != "rule" and not system.run_calibration():

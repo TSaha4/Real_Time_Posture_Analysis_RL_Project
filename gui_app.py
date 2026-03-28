@@ -99,6 +99,24 @@ class UPRYTApplication:
                                           textvariable=self.episodes_var, width=10)
         self.episodes_spin.pack(side="left", padx=(10, 0))
         
+        self.extra_options_frame = ttk.Frame(self.root, padding=(20, 0, 20, 10))
+        self.extra_options_frame.pack(fill="x")
+        
+        self.audio_var = tk.BooleanVar(value=False)
+        self.audio_check = ttk.Checkbutton(self.extra_options_frame, text="Audio Alerts", 
+                                           variable=self.audio_var)
+        self.audio_check.pack(side="left", padx=10)
+        
+        self.multi_camera_var = tk.BooleanVar(value=False)
+        self.multi_camera_check = ttk.Checkbutton(self.extra_options_frame, text="Multi-Camera",
+                                                   variable=self.multi_camera_var)
+        self.multi_camera_check.pack(side="left", padx=10)
+        
+        self.online_learning_var = tk.BooleanVar(value=False)
+        self.online_learning_check = ttk.Checkbutton(self.extra_options_frame, text="Online Learning",
+                                                      variable=self.online_learning_var)
+        self.online_learning_check.pack(side="left", padx=10)
+        
         self._on_mode_changed()
     
     def _on_mode_changed(self):
@@ -111,6 +129,9 @@ class UPRYTApplication:
             self.algorithm_combo.config(state="readonly")
             self.episodes_label.config(state="disabled")
             self.episodes_spin.config(state="disabled")
+            self.audio_check.config(state="normal")
+            self.multi_camera_check.config(state="normal")
+            self.online_learning_check.config(state="normal")
         elif mode == "train":
             self.algorithm_combo["values"] = ["ppo", "dqn"]
             self.algorithm_var.set("ppo")
@@ -118,11 +139,17 @@ class UPRYTApplication:
             self.algorithm_combo.config(state="readonly")
             self.episodes_label.config(state="normal")
             self.episodes_spin.config(state="normal")
+            self.audio_check.config(state="disabled")
+            self.multi_camera_check.config(state="disabled")
+            self.online_learning_check.config(state="disabled")
         elif mode == "compare":
             self.algorithm_label.config(state="disabled")
             self.algorithm_combo.config(state="disabled")
             self.episodes_label.config(state="disabled")
             self.episodes_spin.config(state="disabled")
+            self.audio_check.config(state="disabled")
+            self.multi_camera_check.config(state="disabled")
+            self.online_learning_check.config(state="disabled")
     
     def _create_control_buttons(self):
         button_frame = ttk.Frame(self.root, padding=15)
@@ -196,6 +223,9 @@ class UPRYTApplication:
         mode = self.mode_var.get()
         algorithm = self.algorithm_var.get()
         episodes = self.episodes_var.get()
+        enable_audio = self.audio_var.get()
+        enable_multicamera = self.multi_camera_var.get()
+        enable_online_learning = self.online_learning_var.get()
         
         self.is_running = True
         self.start_button.config(state="disabled")
@@ -205,7 +235,18 @@ class UPRYTApplication:
         
         if mode == "realtime":
             cmd.append(f"--algorithm={algorithm}")
-            self._log(f"Starting Real-Time Monitoring ({algorithm.upper()})...", "info")
+            if enable_audio:
+                cmd.append("--audio")
+            if enable_multicamera:
+                cmd.append("--multi-camera")
+            if enable_online_learning:
+                cmd.append("--online-learning")
+            flags = []
+            if enable_audio: flags.append("Audio")
+            if enable_multicamera: flags.append("Multi-cam")
+            if enable_online_learning: flags.append("Online Learning")
+            flag_str = f" [{', '.join(flags)}]" if flags else ""
+            self._log(f"Starting Real-Time Monitoring ({algorithm.upper()}){flag_str}...", "info")
         elif mode == "train":
             cmd.append(f"--algorithm={algorithm}")
             cmd.append(f"--episodes={episodes}")
