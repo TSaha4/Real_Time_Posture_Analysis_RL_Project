@@ -26,14 +26,14 @@ class VisualFeedback:
         self.window_name = config.feedback.window_name
         self.font = cv2.FONT_HERSHEY_SIMPLEX
         self.font_scale = config.feedback.font_scale
-        self.thickness = 2
+        self.thickness = 1
         self.good_color = config.feedback.posture_good_color
         self.bad_color = config.feedback.posture_bad_color
         self.warning_color = config.feedback.posture_warning_color
-        self.info_panel_height = 180
-        self.info_panel_width = 350
-        self.info_panel_margin = 15
-        self.logo = self._load_logo()
+        self.info_panel_height = 85
+        self.info_panel_width = 220
+        self.info_panel_margin = 10
+        self.logo = None
 
     def _load_logo(self):
         import os
@@ -70,51 +70,49 @@ class VisualFeedback:
         panel = np.zeros((panel_h, panel_w, 3), dtype=np.uint8)
         
         cv2.rectangle(panel, (0, 0), (panel_w, panel_h), (30, 30, 30), -1)
-        cv2.rectangle(panel, (0, 0), (panel_w, panel_h), (100, 100, 100), 2)
+        cv2.rectangle(panel, (0, 0), (panel_w, panel_h), (80, 80, 80), 1)
         
         score_color = self._get_score_color(posture_score)
         
-        cv2.putText(panel, f"Posture: {posture_label.upper()}", (10, 28),
-                   self.font, 0.6, score_color, 2)
-        bar_width = 150
-        bar_height = 16
-        bar_x = 10
-        bar_y = 40
+        y_offset = 18
+        label_text = posture_label.upper()
+        cv2.putText(panel, label_text, (8, y_offset),
+                   self.font, 0.5, score_color, 1)
+        
+        bar_width = 80
+        bar_height = 8
+        bar_x = 8
+        bar_y = 24
         self._draw_score_bar(panel, posture_score, bar_x, bar_y, bar_width, bar_height)
-        cv2.putText(panel, f"{posture_score:.0%}", (bar_x + bar_width + 8, bar_y + 13),
-                   self.font, 0.45, (255, 255, 255), 1)
+        cv2.putText(panel, f"{posture_score:.0%}", (bar_x + bar_width + 5, bar_y + 7),
+                   self.font, 0.35, (200, 200, 200), 1)
         
-        cv2.putText(panel, f"Action: {action_taken}", (10, 70),
-                   self.font, 0.5, (200, 200, 200), 1)
+        cv2.putText(panel, f"{action_taken}", (bar_x + bar_width + 55, bar_y + 7),
+                   self.font, 0.35, (150, 150, 150), 1)
         
-        y_offset = 95
-        if suggestion:
-            suggestion_text = suggestion[:35] + "..." if len(suggestion) > 35 else suggestion
-            cv2.putText(panel, suggestion_text, (10, y_offset),
-                       self.font, 0.45, (255, 200, 100), 1)
-            y_offset += 22
+        y_offset = 50
+        metric_keys = list(metrics.keys())[:3]
+        metric_vals = list(metrics.values())[:3]
+        metrics_text = " | ".join([f"{k}:{v}" for k, v in zip(metric_keys, metric_vals)])
+        if len(metrics_text) > 35:
+            metrics_text = metrics_text[:32] + "..."
+        cv2.putText(panel, metrics_text, (8, y_offset),
+                   self.font, 0.35, (140, 140, 140), 1)
         
-        for key, value in list(metrics.items())[:3]:
-            text = f"{key}: {value}"
-            cv2.putText(panel, text, (10, y_offset), self.font, 0.4, (160, 160, 160), 1)
-            y_offset += 18
-        
-        if self.logo is not None:
-            logo_x = panel_w - self.logo.shape[1] - 10
-            logo_y = panel_h - self.logo.shape[1] - 10
-            panel[logo_y:logo_y+self.logo.shape[0], logo_x:logo_x+self.logo.shape[1]] = self.logo
+        if suggestion and len(suggestion) > 0:
+            y_offset = 70
+            suggestion_text = suggestion[:30] + "..." if len(suggestion) > 30 else suggestion
+            cv2.putText(panel, suggestion_text, (8, y_offset),
+                       self.font, 0.3, (180, 180, 180), 1)
         
         return panel
 
     def _draw_score_bar(self, panel: np.ndarray, score: float, x: int, y: int, width: int, height: int):
-        cv2.rectangle(panel, (x, y), (x + width, y + height), (50, 50, 50), -1)
+        cv2.rectangle(panel, (x, y), (x + width, y + height), (60, 60, 60), -1)
         fill_width = int(width * score)
         if fill_width > 0:
             cv2.rectangle(panel, (x, y), (x + fill_width, y + height), self._get_score_color(score), -1)
-        cv2.rectangle(panel, (x, y), (x + width, y + height), (255, 255, 255), 1)
-        for i in range(1, 4):
-            tick_x = x + int(width * i / 4)
-            cv2.line(panel, (tick_x, y), (tick_x, y + height), (100, 100, 100), 1)
+        cv2.rectangle(panel, (x, y), (x + width, y + height), (100, 100, 100), 1)
 
     def _get_score_color(self, score: float) -> Tuple[int, int, int]:
         if score >= 0.7:
@@ -124,11 +122,11 @@ class VisualFeedback:
         return self.bad_color
 
     def _blend_panel(self, frame: np.ndarray, panel: np.ndarray) -> np.ndarray:
-        panel_alpha = 0.9
+        panel_alpha = 0.85
         h, w = frame.shape[:2]
         panel_h, panel_w = panel.shape[:2]
         
-        margin = 15
+        margin = 10
         x = w - panel_w - margin
         y = margin
         

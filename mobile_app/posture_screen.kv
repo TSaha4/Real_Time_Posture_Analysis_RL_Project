@@ -1,0 +1,384 @@
+#:kivy 2.2.0
+
+# UPRYT Mobile App - Main Screen UI
+
+<MainScreen>:
+    name: 'main'
+    
+    BoxLayout:
+        orientation: 'vertical'
+        padding: 10
+        spacing: 10
+        
+        # Header
+        BoxLayout:
+            size_hint_y: 0.08
+            Label:
+                text: 'UPRYT Posture'
+                font_size: 24
+                bold: True
+                color: 0.2, 0.6, 1, 1
+            
+            Button:
+                size_hint_x: 0.3
+                text: 'Stats'
+                on_press: app.root.current = 'stats'
+            
+            Button:
+                size_hint_x: 0.3
+                text: 'Settings'
+                on_press: app.root.current = 'settings'
+        
+        # Camera Preview
+        BoxLayout:
+            size_hint_y: 0.5
+            canvas.before:
+                Color:
+                    rgb: 0.1, 0.1, 0.1
+                Rectangle:
+                    pos: self.pos
+                    size: self.size
+            
+            Image:
+                id: camera_image
+                allow_stretch: True
+                keep_ratio: True
+                source: ''
+            
+            # Overlay labels
+            BoxLayout:
+                pos: root.x + 10, root.top - 100
+                size_hint: None, None
+                size: 150, 80
+                orientation: 'vertical'
+                padding: 5
+                canvas.before:
+                    Color:
+                        rgba: 0, 0, 0, 0.5
+                    Rectangle:
+                        pos: self.pos
+                        size: self.size
+                
+                Label:
+                    id: posture_label
+                    text: 'UNKNOWN'
+                    font_size: 18
+                    bold: True
+                    color: 1, 1, 0, 1
+                
+                Label:
+                    id: attention_label
+                    text: 'Attention: --'
+                    font_size: 14
+                    color: 0.7, 0.7, 0.7, 1
+                
+                Label:
+                    id: fps_label
+                    text: 'FPS: 0'
+                    font_size: 12
+                    color: 0.5, 0.5, 0.5, 1
+        
+        # Score Display
+        BoxLayout:
+            size_hint_y: 0.15
+            orientation: 'vertical'
+            padding: 10
+            
+            Label:
+                id: score_label
+                text: '80%'
+                font_size: 48
+                bold: True
+                color: 0.2, 0.9, 0.2, 1
+            
+            ProgressBar:
+                id: score_bar
+                value: 80
+                max: 100
+                height: 20
+                background_color: 0.3, 0.3, 0.3, 1
+                
+                canvas.before:
+                    Color:
+                        rgb: 0.2, 0.9, 0.2
+                    Rectangle:
+                        pos: self.pos
+                        size: (self.width * self.value / 100, self.height)
+        
+        # Status
+        BoxLayout:
+            size_hint_y: 0.08
+            padding: 10
+            
+            BoxLayout:
+                size_hint_x: 0.1
+                id: status_indicator
+                canvas.before:
+                    Color:
+                        rgb: 0.2, 0.8, 0.2
+                    Ellipse:
+                        pos: self.pos
+                        size: 30, 30
+                
+                Label:
+                    text: ''
+            
+            Label:
+                id: status_label
+                text: 'Ready'
+                font_size: 16
+                halign: 'left'
+                valign: 'middle'
+        
+        # Control Buttons
+        BoxLayout:
+            size_hint_y: 0.15
+            padding: 10
+            spacing: 20
+            
+            Button:
+                id: start_button
+                text: 'Start Monitoring'
+                font_size: 18
+                on_press: root.toggle_monitoring()
+                background_color: 0.2, 0.7, 0.2, 1
+            
+            Button:
+                text: 'Calibrate'
+                font_size: 16
+                on_press: root.calibrate()
+                background_color: 0.3, 0.3, 0.7, 1
+
+
+<SettingsScreen>:
+    name: 'settings'
+    
+    BoxLayout:
+        orientation: 'vertical'
+        padding: 20
+        spacing: 15
+        
+        Label:
+            text: 'Settings'
+            font_size: 28
+            bold: True
+            size_hint_y: 0.1
+        
+        # Sensitivity
+        BoxLayout:
+            orientation: 'vertical'
+            size_hint_y: 0.2
+            padding: 10
+            
+            Label:
+                text: 'Detection Sensitivity'
+                font_size: 16
+            
+            BoxLayout:
+                Label:
+                    text: 'Low'
+                    font_size: 12
+                    size_hint_x: 0.15
+                
+                Slider:
+                    id: sensitivity_slider
+                    min: 0
+                    max: 100
+                    value: 50
+                    size_hint_x: 0.7
+                
+                Label:
+                    text: 'High'
+                    font_size: 12
+                    size_hint_x: 0.15
+        
+        # Toggles
+        BoxLayout:
+            size_hint_y: 0.3
+            orientation: 'vertical'
+            padding: 10
+            
+            BoxLayout:
+                CheckBox:
+                    id: audio_switch
+                    active: True
+                    size_hint_x: 0.2
+                Label:
+                    text: 'Audio Alerts'
+                    font_size: 16
+                    size_hint_x: 0.6
+                    halign: 'left'
+                Label:
+                    text: ''
+                    size_hint_x: 0.2
+            
+            BoxLayout:
+                CheckBox:
+                    id: attention_switch
+                    active: True
+                    size_hint_x: 0.2
+                Label:
+                    text: 'Attention Tracking'
+                    font_size: 16
+                    size_hint_x: 0.6
+                    halign: 'left'
+                Label:
+                    text: ''
+                    size_hint_x: 0.2
+            
+            BoxLayout:
+                CheckBox:
+                    id: hand_switch
+                    active: True
+                    size_hint_x: 0.2
+                Label:
+                    text: 'Hand Tracking'
+                    font_size: 16
+                    size_hint_x: 0.6
+                    halign: 'left'
+                Label:
+                    text: ''
+                    size_hint_x: 0.2
+        
+        Widget:
+            size_hint_y: 0.2
+        
+        # Buttons
+        BoxLayout:
+            size_hint_y: 0.15
+            spacing: 20
+            
+            Button:
+                text: 'Save'
+                on_press: root.save_settings()
+                background_color: 0.2, 0.7, 0.2, 1
+            
+            Button:
+                text: 'Reset Defaults'
+                on_press: root.reset_to_defaults()
+                background_color: 0.7, 0.3, 0.2, 1
+        
+        Button:
+            text: 'Back'
+            size_hint_y: 0.1
+            on_press: app.root.current = 'main'
+
+
+<StatsScreen>:
+    name: 'stats'
+    
+    BoxLayout:
+        orientation: 'vertical'
+        padding: 20
+        spacing: 15
+        
+        Label:
+            text: 'Statistics'
+            font_size: 28
+            bold: True
+            size_hint_y: 0.1
+        
+        # Stats Grid
+        GridLayout:
+            cols: 2
+            size_hint_y: 0.5
+            spacing: 15
+            padding: 10
+            
+            # Total Time
+            BoxLayout:
+                orientation: 'vertical'
+                canvas.before:
+                    Color:
+                        rgba: 0.2, 0.2, 0.3, 1
+                    Rectangle:
+                        pos: self.pos
+                        size: self.size
+                
+                Label:
+                    text: 'Total Time'
+                    font_size: 14
+                    color: 0.7, 0.7, 0.7, 1
+                Label:
+                    id: total_time_label
+                    text: '0 min'
+                    font_size: 24
+                    bold: True
+            
+            # Sessions
+            BoxLayout:
+                orientation: 'vertical'
+                canvas.before:
+                    Color:
+                        rgba: 0.2, 0.2, 0.3, 1
+                    Rectangle:
+                        pos: self.pos
+                        size: self.size
+                
+                Label:
+                    text: 'Sessions'
+                    font_size: 14
+                    color: 0.7, 0.7, 0.7, 1
+                Label:
+                    id: sessions_label
+                    text: '0'
+                    font_size: 24
+                    bold: True
+            
+            # Good Posture %
+            BoxLayout:
+                orientation: 'vertical'
+                canvas.before:
+                    Color:
+                        rgba: 0.2, 0.2, 0.3, 1
+                    Rectangle:
+                        pos: self.pos
+                        size: self.size
+                
+                Label:
+                    text: 'Good Posture'
+                    font_size: 14
+                    color: 0.7, 0.7, 0.7, 1
+                Label:
+                    id: good_posture_label
+                    text: '0%'
+                    font_size: 24
+                    bold: True
+                    color: 0.2, 0.9, 0.2, 1
+            
+            # Alerts
+            BoxLayout:
+                orientation: 'vertical'
+                canvas.before:
+                    Color:
+                        rgba: 0.2, 0.2, 0.3, 1
+                    Rectangle:
+                        pos: self.pos
+                        size: self.size
+                
+                Label:
+                    text: 'Alerts Sent'
+                    font_size: 14
+                    color: 0.7, 0.7, 0.7, 1
+                Label:
+                    id: alerts_label
+                    text: '0'
+                    font_size: 24
+                    bold: True
+        
+        Widget:
+            size_hint_y: 0.2
+        
+        # Buttons
+        BoxLayout:
+            size_hint_y: 0.15
+            spacing: 20
+            
+            Button:
+                text: 'Reset Stats'
+                on_press: root.reset_stats()
+                background_color: 0.7, 0.3, 0.2, 1
+            
+            Button:
+                text: 'Back'
+                on_press: app.root.current = 'main'

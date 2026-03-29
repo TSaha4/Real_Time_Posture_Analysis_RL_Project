@@ -46,8 +46,9 @@ class RLConfig:
 @dataclass
 class SystemConfig:
     decision_interval: float = 2.5
-    calibration_frames: int = 30
-    calibration_timeout: float = 15.0
+    calibration_frames: int = 20
+    calibration_timeout: float = 30.0
+    calibration_min_frames: int = 10
     cooldown_period: float = 3.0
     log_dir: str = "logs"
     model_dir: str = "models"
@@ -98,6 +99,10 @@ class OnlineLearningConfig:
     batch_size: int = 32
     learning_rate: float = 0.0001
     store_experience: bool = True
+    min_experiences: int = 32
+    max_buffer_size: int = 5000
+    auto_adjust_lr: bool = True
+    save_interval: int = 300
 
 
 @dataclass
@@ -107,6 +112,34 @@ class PoseModelConfig:
     use_movenet: bool = False
     enable_face: bool = True
     enable_hands: bool = False
+    enable_attention_tracking: bool = False
+    enable_hand_tracking: bool = False
+
+
+@dataclass
+class GamificationConfig:
+    enabled: bool = True
+    achievements_enabled: bool = True
+    streaks_enabled: bool = True
+    profiles_dir: str = "data/profiles"
+
+
+@dataclass
+class TrainingEnhancementsConfig:
+    enable_curriculum: bool = True
+    enable_domain_randomization: bool = True
+    curriculum_stages: int = 3
+    episodes_per_stage: int = 150
+    randomization_strength: float = 0.3
+
+
+@dataclass
+class AudioEnhancementConfig:
+    adaptive_volume: bool = True
+    pattern_variety: bool = True
+    cooldown_base: float = 3.0
+    cooldown_low_priority: float = 4.5
+    cooldown_high_priority: float = 2.0
 
 
 class Config:
@@ -120,11 +153,15 @@ class Config:
     multi_camera = MultiCameraConfig()
     online_learning = OnlineLearningConfig()
     pose_model = PoseModelConfig()
+    gamification = GamificationConfig()
+    training = TrainingEnhancementsConfig()
+    audio_enhancement = AudioEnhancementConfig()
 
     @classmethod
     def create_dirs(cls):
         os.makedirs(cls.system.log_dir, exist_ok=True)
         os.makedirs(cls.system.model_dir, exist_ok=True)
+        os.makedirs(cls.gamification.profiles_dir, exist_ok=True)
 
 
 config = Config()

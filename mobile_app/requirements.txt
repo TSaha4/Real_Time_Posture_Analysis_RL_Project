@@ -1,0 +1,20 @@
+# UPRYT Mobile - Python Dependencies
+# Install with: pip install -r requirements.txt
+
+# Core Kivy framework
+kivy==2.2.0
+
+# Computer Vision
+opencv-python-headless==4.8.1.78
+
+# MediaPipe for pose detection
+mediapipe==0.10.7
+
+# Numerical computing
+numpy==1.24.3
+
+# Storage for settings
+# (included with Kivy)
+
+# Audio (for alerts)
+# pyglet==2.0.8  # Optional - for sound playback
