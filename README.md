@@ -1,4 +1,4 @@
-# UPRYT v2 - Real-Time Posture Analysis with Reinforcement Learning
+# UPRYT - Real-Time Posture Analysis with Reinforcement Learning
 
 An advanced posture correction system using RL for adaptive feedback with auto-switching algorithms, attention tracking, and hand tracking.
 
