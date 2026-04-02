@@ -28,19 +28,21 @@ class PostureConfig:
 
 @dataclass
 class RLConfig:
-    state_size: int = 6
+    state_size: int = 18
     action_size: int = 3
-    hidden_sizes: List[int] = field(default_factory=lambda: [128, 64, 32])
-    learning_rate: float = 0.001
-    gamma: float = 0.95
+    hidden_sizes: List[int] = field(default_factory=lambda: [256, 128, 64])
+    learning_rate: float = 0.001  # Start higher, will decay
+    gamma: float = 0.99
     epsilon_start: float = 1.0
     epsilon_min: float = 0.01
     epsilon_decay: float = 0.995
-    batch_size: int = 64
-    memory_size: int = 10000
+    batch_size: int = 128  # Increased from 64 for stability
+    memory_size: int = 20000  # Increased from 10000
     target_update_freq: int = 10
     learning_freq: int = 4
     gradient_clip: float = 1.0
+    lr_decay: float = 0.5  # Decay factor
+    lr_decay_interval: int = 500  # Episodes between decay
 
 
 @dataclass
@@ -60,7 +62,7 @@ class RewardConfig:
     posture_improve: float = 10.0
     alert_ignored: float = -5.0
     alert_fatigue: float = -3.0
-    sustained_good: float = 2.0
+    sustained_good: float = 0.5  # Reduced from 2.0 to prevent inflated rewards
     no_face_detected: float = -2.0
     posture_worsen: float = -5.0
 

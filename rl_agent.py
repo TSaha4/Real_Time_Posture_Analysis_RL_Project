@@ -65,6 +65,11 @@ class DQNAgent:
         self.epsilon_decay = epsilon_decay if epsilon_decay is not None else config.rl.epsilon_decay
         self.memory = ReplayBuffer(memory_size or config.rl.memory_size)
         self.learn_step = 0
+        
+        # LR scheduling
+        self.lr_decay = config.rl.lr_decay
+        self.lr_decay_interval = config.rl.lr_decay_interval
+        
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.q_network = QNetwork(self.state_size, self.action_size, self.hidden_sizes).to(self.device)
         self.target_network = QNetwork(self.state_size, self.action_size, self.hidden_sizes).to(self.device)
@@ -89,6 +94,12 @@ class DQNAgent:
         if len(self.memory) < self.batch_size or self.learn_step % self.learning_freq != 0:
             self.learn_step += 1
             return None
+        
+        # LR scheduling: decay every lr_decay_interval updates
+        if self.learn_step > 0 and self.learn_step % self.lr_decay_interval == 0:
+            for param_group in self.optimizer.param_groups:
+                param_group['lr'] = max(param_group['lr'] * self.lr_decay, 1e-5)
+        
         batch = self.memory.sample(self.batch_size)
         states = torch.FloatTensor(np.array([t.state for t in batch])).to(self.device)
         actions = torch.LongTensor([t.action for t in batch]).to(self.device)
@@ -146,7 +157,7 @@ def create_agent(agent_type: str = "dqn", state_size: int = None, action_size: i
 
 
 if __name__ == "__main__":
-    agent = DQNAgent(state_size=6, action_size=3)
+    agent = DQNAgent(state_size=18, action_size=3)
     state = np.random.rand(6).astype(np.float32)
     action = agent.get_action(state)
     print(f"State shape: {state.shape}, Action: {action} ({agent.get_action_name(action)})")

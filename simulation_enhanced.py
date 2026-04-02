@@ -7,6 +7,7 @@ from config import config
 import random
 import os
 import json
+from datetime import datetime
 
 
 @dataclass
@@ -18,38 +19,42 @@ class UserBehaviorProfile:
     learning_rate: float = 0.05
     reset_probability: float = 0.1
     posture_preference: str = "neutral"
+    difficulty: str = "medium"
     
     @classmethod
     def random_profile(cls, difficulty: str = "medium") -> "UserBehaviorProfile":
         if difficulty == "easy":
             return cls(
                 compliance_rate=random.uniform(0.8, 0.95),
-                fatigue_threshold=random.randint(4, 6),
+                fatigue_threshold=random.randint(5, 8),
                 stubbornness=random.uniform(0.05, 0.15),
                 attention_span=random.uniform(0.85, 1.0),
-                learning_rate=random.uniform(0.08, 0.15),
-                reset_probability=0.05,
+                learning_rate=random.uniform(0.1, 0.2),
+                reset_probability=0.03,
                 posture_preference=random.choice(["good", "neutral"]),
+                difficulty="easy",
             )
         elif difficulty == "medium":
             return cls(
-                compliance_rate=random.uniform(0.5, 0.8),
-                fatigue_threshold=random.randint(2, 5),
-                stubbornness=random.uniform(0.1, 0.3),
-                attention_span=random.uniform(0.6, 0.9),
-                learning_rate=random.uniform(0.03, 0.08),
+                compliance_rate=random.uniform(0.5, 0.75),
+                fatigue_threshold=random.randint(2, 4),
+                stubbornness=random.uniform(0.15, 0.35),
+                attention_span=random.uniform(0.6, 0.85),
+                learning_rate=random.uniform(0.05, 0.1),
                 reset_probability=0.1,
                 posture_preference=random.choice(["good", "neutral", "slouching"]),
+                difficulty="medium",
             )
-        else:
+        else:  # hard
             return cls(
-                compliance_rate=random.uniform(0.3, 0.6),
-                fatigue_threshold=random.randint(1, 3),
-                stubbornness=random.uniform(0.25, 0.5),
-                attention_span=random.uniform(0.4, 0.7),
+                compliance_rate=random.uniform(0.2, 0.5),
+                fatigue_threshold=random.randint(1, 2),
+                stubbornness=random.uniform(0.35, 0.6),
+                attention_span=random.uniform(0.3, 0.6),
                 learning_rate=random.uniform(0.01, 0.04),
-                reset_probability=0.2,
-                posture_preference=random.choice(["slouching", "leaning", "neutral"]),
+                reset_probability=0.25,
+                posture_preference=random.choice(["slouching", "leaning", "forward_head"]),
+                difficulty="hard",
             )
 
     def to_dict(self) -> dict:
@@ -61,11 +66,8 @@ class UserBehaviorProfile:
             "learning_rate": self.learning_rate,
             "reset_probability": self.reset_probability,
             "posture_preference": self.posture_preference,
+            "difficulty": self.difficulty,
         }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "UserBehaviorProfile":
-        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
 
 
 class SimulatedUser:
@@ -75,19 +77,22 @@ class SimulatedUser:
         self.current_posture: PostureLabel = PostureLabel.GOOD
         self.current_score: float = 0.8
         self.consecutive_alerts: int = 0
-        self.alert_history: list = []
         self.total_alerts_received: int = 0
         self.total_corrections: int = 0
-        self.successful_alerts: int = 0
-        self.ignored_alerts: int = 0
-        self.session_history: List[dict] = []
+        self.correction_streak: int = 0
+        self.max_correction_streak: int = 0
         self.behavior_state = {
             "fatigue_level": 0.0,
-            "motivation": random.uniform(0.5, 1.0),
+            "motivation": random.uniform(0.7, 1.0),
             "frustration": 0.0,
-            "streak": 0,
-            "best_streak": 0,
         }
+        self.episode_alerts = 0
+        self.episode_corrections = 0
+
+    def reset_episode(self):
+        self.consecutive_alerts = 0
+        self.episode_alerts = 0
+        self.episode_corrections = 0
 
     def get_posture(self) -> Tuple[PostureLabel, float]:
         return self.current_posture, self.current_score
@@ -95,638 +100,522 @@ class SimulatedUser:
     def receive_feedback(self, action: int) -> bool:
         if action == Action.NO_FEEDBACK.value:
             return False
+        
         self.total_alerts_received += 1
         self.consecutive_alerts += 1
-        self.alert_history.append({
-            "action": action,
-            "score_before": self.current_score,
-            "timestamp": len(self.alert_history),
-        })
-        correction_made = self._simulate_user_response(action)
+        self.episode_alerts += 1
+        
+        correction_made = self._simulate_response(action)
         
         if correction_made:
             self.total_corrections += 1
-            self.successful_alerts += 1
-            self.behavior_state["streak"] += 1
-            self.behavior_state["best_streak"] = max(self.behavior_state["best_streak"], 
-                                                      self.behavior_state["streak"])
-            self.behavior_state["motivation"] = min(1.0, self.behavior_state["motivation"] + 0.05)
-            self.behavior_state["frustration"] = max(0.0, self.behavior_state["frustration"] - 0.1)
+            self.episode_corrections += 1
+            self.correction_streak += 1
+            self.max_correction_streak = max(self.max_correction_streak, self.correction_streak)
+            self.behavior_state["motivation"] = min(1.0, self.behavior_state["motivation"] + 0.02)
+            self.behavior_state["frustration"] = max(0.0, self.behavior_state["frustration"] - 0.05)
             self._improve_posture()
-            return True
         else:
-            self.ignored_alerts += 1
-            self.behavior_state["streak"] = 0
-            self.behavior_state["frustration"] = min(1.0, self.behavior_state["frustration"] + 0.1)
-            if self.behavior_state["frustration"] > 0.7:
-                self.behavior_state["motivation"] = max(0.0, self.behavior_state["motivation"] - 0.1)
+            self.correction_streak = 0
+            self.behavior_state["frustration"] = min(1.0, self.behavior_state["frustration"] + 0.08)
+            if self.behavior_state["frustration"] > 0.6:
+                self.behavior_state["motivation"] = max(0.0, self.behavior_state["motivation"] - 0.05)
             self._worsen_posture()
-            return False
+        
+        return correction_made
 
-    def _simulate_user_response(self, action: int) -> bool:
-        base_compliance = self.profile.compliance_rate
+    def _simulate_response(self, action: int) -> bool:
+        base = self.profile.compliance_rate
         
-        base_compliance *= (1 + self.behavior_state["motivation"] * 0.2)
-        base_compliance *= (1 - self.behavior_state["frustration"] * 0.3)
+        # Motivation increases compliance
+        base *= (0.5 + 0.5 * self.behavior_state["motivation"])
         
+        # Frustration decreases compliance  
+        base *= (1.0 - 0.4 * self.behavior_state["frustration"])
+        
+        # Fatigue from too many consecutive alerts
         if self.consecutive_alerts > self.profile.fatigue_threshold:
-            fatigue_multiplier = 1 - (self.consecutive_alerts - self.profile.fatigue_threshold) * self.profile.stubbornness
-            base_compliance *= max(0.1, fatigue_multiplier)
+            fatigue_penalty = (self.consecutive_alerts - self.profile.fatigue_threshold) * 0.15
+            base *= max(0.1, 1.0 - fatigue_penalty)
         
+        # Stronger alerts work better
         if action == Action.STRONG_ALERT.value:
-            base_compliance += 0.2
+            base += 0.15
         elif action == Action.SUBTLE_ALERT.value:
-            base_compliance += 0.05
+            base += 0.05
         
+        # First alert of a session gets attention bonus
         if self.consecutive_alerts == 1:
-            base_compliance *= self.profile.attention_span
-        elif self.consecutive_alerts > 1:
-            base_compliance *= (1 - 0.1 * (self.consecutive_alerts - 1))
+            base *= (0.7 + 0.3 * self.profile.attention_span)
         
+        # User's posture preference affects compliance
         if self.profile.posture_preference == "slouching":
-            base_compliance *= 0.7
+            base *= 0.65
         elif self.profile.posture_preference == "leaning":
-            base_compliance *= 0.75
+            base *= 0.7
+        elif self.profile.posture_preference == "forward_head":
+            base *= 0.7
         
-        base_compliance = max(0.05, min(0.98, base_compliance))
-        return random.random() < base_compliance
+        base = max(0.05, min(0.95, base))
+        return random.random() < base
 
     def _improve_posture(self):
         self.consecutive_alerts = 0
-        improvement = 0.15 + self.profile.learning_rate * 0.1
+        improvement = 0.2 + self.profile.learning_rate * 0.15
         
         if self.current_posture == PostureLabel.GOOD:
-            self.current_score = min(1.0, self.current_score + 0.05)
-        elif self.current_posture == PostureLabel.SLOUCHING:
-            self.current_posture = PostureLabel.GOOD
-            self.current_score = min(1.0, self.current_score + improvement)
-        elif self.current_posture == PostureLabel.FORWARD_HEAD:
-            self.current_posture = PostureLabel.GOOD
-            self.current_score = min(1.0, self.current_score + improvement * 1.2)
-        elif self.current_posture == PostureLabel.LEANING:
-            self.current_posture = PostureLabel.GOOD
-            self.current_score = min(1.0, self.current_score + improvement * 1.2)
+            self.current_score = min(0.95, self.current_score + 0.03)
         else:
             self.current_posture = PostureLabel.GOOD
-            self.current_score = 0.8
+            self.current_score = min(0.9, self.current_score + improvement)
 
     def _worsen_posture(self):
-        score_decrease = 0.08 + self.profile.stubbornness * 0.15
-        score_decrease *= (1 + self.behavior_state["frustration"] * 0.5)
-        self.current_score = max(0.1, self.current_score - score_decrease)
+        decay = 0.1 + self.profile.stubbornness * 0.12
+        decay *= (1.0 + 0.3 * self.behavior_state["frustration"])
+        self.current_score = max(0.2, self.current_score - decay)
         
-        if random.random() < 0.35 + self.profile.stubbornness * 0.2:
-            if self.current_posture == PostureLabel.GOOD:
-                self.current_posture = random.choice([PostureLabel.SLOUCHING, PostureLabel.FORWARD_HEAD])
-            elif self.current_posture == PostureLabel.SLOUCHING and random.random() < 0.5:
-                self.current_posture = PostureLabel.FORWARD_HEAD
-            elif self.current_posture == PostureLabel.FORWARD_HEAD and random.random() < 0.4:
-                self.current_posture = PostureLabel.LEANING
+        # Occasionally change posture type
+        if self.current_score < 0.6 and random.random() < 0.4:
+            bad_postures = [PostureLabel.SLOUCHING, PostureLabel.FORWARD_HEAD, PostureLabel.LEANING]
+            self.current_posture = random.choice(bad_postures)
 
     def natural_drift(self):
-        self.behavior_state["fatigue_level"] = min(1.0, self.behavior_state["fatigue_level"] + 0.01)
+        self.behavior_state["fatigue_level"] = min(1.0, self.behavior_state["fatigue_level"] + 0.008)
         
-        if random.random() < 0.25 * (1 + self.behavior_state["fatigue_level"]):
-            self.current_score = max(0.35, self.current_score - 0.03)
-            if self.current_score < 0.6 and self.current_posture == PostureLabel.GOOD:
-                if random.random() < 0.5:
-                    self.current_posture = random.choice([PostureLabel.SLOUCHING, PostureLabel.FORWARD_HEAD, PostureLabel.LEANING])
-                    self.behavior_state["streak"] = 0
+        # Natural score decay
+        if random.random() < 0.2 * (1 + self.behavior_state["fatigue_level"]):
+            self.current_score = max(0.3, self.current_score - 0.02)
+            
+            # Drift to bad posture if score low
+            if self.current_score < 0.55 and self.current_posture == PostureLabel.GOOD:
+                if random.random() < 0.4:
+                    self.current_posture = random.choice([
+                        PostureLabel.SLOUCHING, 
+                        PostureLabel.FORWARD_HEAD, 
+                        PostureLabel.LEANING
+                    ])
         
-        if random.random() < self.profile.reset_probability * 0.1:
-            self.behavior_state["motivation"] = min(1.0, self.behavior_state["motivation"] + 0.1)
-            self.behavior_state["frustration"] = max(0.0, self.behavior_state["frustration"] - 0.05)
+        # Occasional motivation boost
+        if random.random() < 0.02:
+            self.behavior_state["motivation"] = min(1.0, self.behavior_state["motivation"] + 0.08)
+            self.behavior_state["frustration"] = max(0.0, self.behavior_state["frustration"] - 0.03)
 
-    def get_behavior_features(self) -> dict:
+    def get_stats(self) -> dict:
         return {
-            "fatigue_level": self.behavior_state["fatigue_level"],
-            "motivation": self.behavior_state["motivation"],
+            "compliance": self.total_corrections / max(1, self.total_alerts_received),
+            "streak": self.correction_streak,
+            "max_streak": self.max_correction_streak,
+            "fatigue": self.behavior_state["fatigue_level"],
             "frustration": self.behavior_state["frustration"],
-            "streak": self.behavior_state["streak"],
-            "best_streak": self.behavior_state["best_streak"],
-            "compliance_score": self.total_corrections / max(1, self.total_alerts_received),
+            "motivation": self.behavior_state["motivation"],
         }
 
-    def reset(self):
+    def reset_user(self):
         self.current_posture = PostureLabel.GOOD
         self.current_score = 0.8
         self.consecutive_alerts = 0
-        self.total_alerts_received = 0
-        self.total_corrections = 0
-        self.successful_alerts = 0
-        self.ignored_alerts = 0
-        self.alert_history = []
-        self.behavior_state["streak"] = 0
-        self.behavior_state["fatigue_level"] = max(0, self.behavior_state["fatigue_level"] - 0.2)
-
-    def to_dict(self) -> dict:
-        return {
-            "user_id": self.user_id,
-            "profile": self.profile.to_dict(),
-            "behavior_state": self.behavior_state.copy(),
-            "total_sessions": len(self.session_history),
-        }
-
-
-class DomainRandomizer:
-    def __init__(self, randomization_strength: float = 0.3):
-        self.randomization_strength = randomization_strength
-        self.perturbation_ranges = {
-            "reward_scale": (-0.2, 0.2),
-            "threshold_scale": (-0.25, 0.25),
-            "delay_scale": (-0.3, 0.3),
-            "noise_std": (0.0, 0.1),
-        }
-        self.current_domain = {}
-
-    def sample_domain(self) -> dict:
-        domain = {}
-        for param, (low, high) in self.perturbation_ranges.items():
-            if random.random() < self.randomization_strength:
-                domain[param] = random.uniform(low, high)
-            else:
-                domain[param] = 0.0
-        self.current_domain = domain
-        return domain
-
-    def apply_noise(self, state_array: np.ndarray) -> np.ndarray:
-        if self.current_domain.get("noise_std", 0) > 0:
-            noise = np.random.normal(0, self.current_domain["noise_std"], state_array.shape)
-            return np.clip(state_array + noise, 0, 1)
-        return state_array
-
-
-class CurriculumManager:
-    def __init__(self, num_stages: int = 3):
-        self.num_stages = num_stages
-        self.current_stage = 0
-        self.episodes_per_stage = 150
-        
-        self.stages = [
-            {"difficulty": "easy", "max_steps": 300, "alert_prob": 0.15, "description": "Easy - Forgiving users"},
-            {"difficulty": "medium", "max_steps": 500, "alert_prob": 0.25, "description": "Medium - Standard users"},
-            {"difficulty": "hard", "max_steps": 500, "alert_prob": 0.35, "description": "Hard - Stubborn users"},
-        ]
-        
-        self.transition_criteria = {
-            0: {"min_reward": 50, "min_episodes": 100},
-            1: {"min_reward": 30, "min_episodes": 100},
-        }
-
-    def get_current_stage(self) -> dict:
-        return self.stages[self.current_stage]
-
-    def should_advance(self, recent_rewards: List[float]) -> bool:
-        if self.current_stage >= self.num_stages - 1:
-            return False
-        
-        criteria = self.transition_criteria.get(self.current_stage, {})
-        min_episodes = criteria.get("min_episodes", 100)
-        min_reward = criteria.get("min_reward", 30)
-        
-        if len(recent_rewards) < min_episodes:
-            return False
-        
-        avg_reward = np.mean(recent_rewards[-min_episodes:])
-        return avg_reward >= min_reward
-
-    def advance_stage(self) -> bool:
-        if self.current_stage < self.num_stages - 1:
-            self.current_stage += 1
-            return True
-        return False
-
-    def get_progress(self) -> dict:
-        progress = self.current_stage / max(1, self.num_stages - 1)
-        return {
-            "stage": self.current_stage,
-            "stage_name": self.stages[self.current_stage]["description"],
-            "progress": progress,
-            "total_stages": self.num_stages,
-        }
+        self.behavior_state["fatigue_level"] = max(0, self.behavior_state["fatigue_level"] - 0.15)
+        self.behavior_state["frustration"] = max(0, self.behavior_state["frustration"] - 0.1)
 
 
 class TrainingSimulator:
-    def __init__(self, num_users: int = 5, enable_curriculum: bool = True, 
-                 enable_domain_randomization: bool = True):
+    def __init__(self, num_users: int = 8, difficulty: str = "medium"):
         self.num_users = num_users
-        self.enable_curriculum = enable_curriculum
-        self.enable_domain_randomization = enable_domain_randomization
+        self.difficulty = difficulty
         
-        self.curriculum = CurriculumManager() if enable_curriculum else None
-        self.domain_randomizer = DomainRandomizer() if enable_domain_randomization else None
+        # Create diverse user pool
+        self.users = [SimulatedUser(UserBehaviorProfile.random_profile(difficulty)) 
+                      for _ in range(num_users)]
+        self.current_user_idx = 0
         
-        self.users = [SimulatedUser(UserBehaviorProfile.random_profile("medium")) for _ in range(num_users)]
-        self.current_user_idx: int = 0
-        self.episode_count: int = 0
-
-    def get_current_user(self) -> SimulatedUser:
-        return self.users[self.current_user_idx]
-
     def switch_user(self):
-        difficulty = "easy"
-        if self.curriculum:
-            difficulty = self.curriculum.get_current_stage()["difficulty"]
+        self.current_user_idx = (self.current_user_idx + 1) % self.num_users
         
-        self.current_user_idx = (self.current_user_idx + 1) % len(self.users)
-        
-        if random.random() < 0.3:
-            new_profile = UserBehaviorProfile.random_profile(difficulty)
+        # Randomly regenerate some users for diversity
+        if random.random() < 0.25:
+            new_profile = UserBehaviorProfile.random_profile(self.difficulty)
             self.users[self.current_user_idx] = SimulatedUser(new_profile)
         
         return self.get_current_user()
-
+    
+    def get_current_user(self) -> SimulatedUser:
+        return self.users[self.current_user_idx]
+    
     def reset_current_user(self):
-        self.get_current_user().reset()
-
-    def simulate_step(self, action: int) -> Tuple[PostureLabel, float]:
+        self.get_current_user().reset_user()
+        self.get_current_user().reset_episode()
+    
+    def step(self, action: int) -> Tuple[PostureLabel, float]:
         user = self.get_current_user()
+        
         if action != Action.NO_FEEDBACK.value:
             user.receive_feedback(action)
-        user.natural_drift()
-        label, score = user.get_posture()
-        return label, score
-
-    def get_user_statistics(self) -> dict:
-        user = self.get_current_user()
-        compliance_rate = user.total_corrections / user.total_alerts_received if user.total_alerts_received > 0 else 0
-        return {
-            "user_index": self.current_user_idx,
-            "user_id": user.user_id,
-            "total_alerts": user.total_alerts_received,
-            "total_corrections": user.total_corrections,
-            "compliance_rate": compliance_rate,
-            "current_posture": user.current_posture.value,
-            "current_score": user.current_score,
-            "behavior_features": user.get_behavior_features(),
-        }
-
-    def get_stage_info(self) -> dict:
-        if self.curriculum:
-            return self.curriculum.get_progress()
-        return {"stage": 0, "stage_name": "Standard", "progress": 1.0}
-
-    def update_curriculum(self, recent_rewards: List[float]) -> dict:
-        if self.curriculum and self.curriculum.should_advance(recent_rewards):
-            self.curriculum.advance_stage()
-            for i, user in enumerate(self.users):
-                difficulty = self.curriculum.get_current_stage()["difficulty"]
-                new_profile = UserBehaviorProfile.random_profile(difficulty)
-                self.users[i].profile = new_profile
         
-        return self.get_stage_info()
+        user.natural_drift()
+        
+        return user.get_posture()
+
+
+class PPOEnvWrapper:
+    """Environment wrapper that provides proper rewards for RL training"""
+    
+    def __init__(self, simulator: TrainingSimulator):
+        self.simulator = simulator
+        self.current_state = None
+        
+    def reset(self) -> np.ndarray:
+        if random.random() < 0.3:
+            self.simulator.switch_user()
+        self.simulator.reset_current_user()
+        
+        label, score = self.simulator.get_current_user().get_posture()
+        
+        # Start with random bad posture 40% of time
+        if random.random() < 0.4:
+            self.simulator.get_current_user().current_posture = random.choice([
+                PostureLabel.SLOUCHING, PostureLabel.FORWARD_HEAD, PostureLabel.LEANING
+            ])
+            self.simulator.get_current_user().current_score = random.uniform(0.3, 0.55)
+        
+        self.current_state = self._create_state(label, score)
+        return self.current_state
+    
+    def step(self, action: int) -> Tuple[np.ndarray, float, bool]:
+        user = self.simulator.get_current_user()
+        
+        # Get posture BEFORE action (for reward calculation)
+        old_label, old_score = user.get_posture()
+        was_bad = (old_label != PostureLabel.GOOD)
+        
+        # Execute action
+        label, score = self.simulator.step(action)
+        
+        # Compute reward
+        reward = self._compute_reward(action, was_bad, label, score)
+        
+        # Create new state
+        self.current_state = self._create_state(label, score)
+        
+        # Done when user reaches high score or max steps
+        done = score >= 0.9
+        
+        return self.current_state, reward, done
+    
+    def _create_state(self, label: PostureLabel, score: float) -> np.ndarray:
+        user = self.simulator.get_current_user()
+        
+        # Build 18-dim state vector
+        state = np.array([
+            # Basic features (6)
+            encode_label(label),
+            score,
+            user.consecutive_alerts / 5.0,
+            user.behavior_state["fatigue_level"],
+            user.behavior_state["motivation"],
+            user.behavior_state["frustration"],
+            # Derived features (6)
+            1.0 if label == PostureLabel.GOOD else 0.0,
+            1.0 - score,  # inverse score = badness
+            user.episode_alerts / 20.0,
+            user.episode_corrections / max(1, user.episode_alerts) if user.episode_alerts > 0 else 0.0,
+            user.correction_streak / 10.0,
+            user.max_correction_streak / 20.0,
+            # User profile features (6)
+            user.profile.compliance_rate,
+            user.profile.stubbornness,
+            user.profile.attention_span,
+            user.profile.learning_rate,
+            1.0 if user.profile.difficulty == "easy" else 0.0,
+            1.0 if user.profile.difficulty == "hard" else 0.0,
+        ], dtype=np.float32)
+        
+        return state
+    
+    def _compute_reward(self, action: int, was_bad: bool, label: PostureLabel, 
+                        score: float) -> float:
+        user = self.simulator.get_current_user()
+        is_good = (label == PostureLabel.GOOD)
+        
+        if action == Action.NO_FEEDBACK.value:
+            if is_good:
+                return 0.05 * score  # Small reward for maintaining
+            else:
+                return -0.1 * (1.0 - score)  # Reduced penalty
+        
+        # Alert given
+        if was_bad and is_good:
+            # Successful correction!
+            base = 1.5  # reduced from 2.0
+            if action == Action.STRONG_ALERT.value:
+                base = 1.8  # reduced from 2.5
+            # TIME BONUS: faster correction = more reward
+            if user.consecutive_alerts <= 2:
+                base += 0.5  # bonus for quick correction
+            return base
+        elif not was_bad and is_good:
+            # Good posture maintained with alert
+            return 0.2  # reduced from 0.3
+        else:
+            # Alert ignored
+            return -0.3  # reduced from -0.8
 
 
 class UnifiedTrainer:
-    def __init__(self, agent, simulator: TrainingSimulator = None, num_episodes: int = 500, 
-                 algorithm: str = "ppo", enable_curriculum: bool = True):
+    def __init__(self, agent, simulator: TrainingSimulator = None,
+                 num_episodes: int = 500, algorithm: str = "ppo"):
         self.agent = agent
-        self.simulator = simulator or TrainingSimulator(enable_curriculum=enable_curriculum)
+        self.simulator = simulator or TrainingSimulator(num_users=8, difficulty="medium")
+        self.env_wrapper = PPOEnvWrapper(self.simulator)
         self.num_episodes = num_episodes
         self.algorithm = algorithm.lower()
-        self.episode_rewards: List[float] = []
-        self.episode_lengths: List[int] = []
-        self.eval_rewards: List[float] = []
-        self.losses: List[float] = []
-        self.best_avg_reward: float = float("-inf")
-        self.recent_eval_rewards: List[float] = []
+        
+        self.episode_rewards = []
+        self.eval_rewards = []
+        self.best_reward = float("-inf")
 
     def train(self, eval_interval: int = 50, verbose: bool = True) -> Dict[str, Any]:
-        training_stats = {
+        stats = {
             "algorithm": self.algorithm,
             "episode_rewards": [],
-            "episode_lengths": [],
             "eval_rewards": [],
-            "loss_history": [],
-            "curriculum_progress": [],
+            "train_rewards": [],
         }
         
         for episode in range(self.num_episodes):
-            episode_reward, episode_length, episode_loss = self._train_episode()
+            # Run episode
+            episode_reward = self._run_episode()
             self.episode_rewards.append(episode_reward)
-            self.episode_lengths.append(episode_length)
-            training_stats["episode_rewards"].append(episode_reward)
-            training_stats["episode_lengths"].append(episode_length)
+            stats["episode_rewards"].append(episode_reward)
             
-            if episode_loss is not None:
-                self.losses.append(episode_loss)
-                training_stats["loss_history"].append(episode_loss)
-            
-            if episode % eval_interval == 0:
-                eval_reward = self._evaluate(num_episodes=10)
+            # Evaluate periodically
+            if episode % eval_interval == 0 or episode == self.num_episodes - 1:
+                eval_reward = self._evaluate(num_eval=5)
                 self.eval_rewards.append(eval_reward)
-                self.recent_eval_rewards.append(eval_reward)
-                training_stats["eval_rewards"].append(eval_reward)
+                stats["eval_rewards"].append(eval_reward)
                 
-                stage_info = self.simulator.update_curriculum(self.recent_eval_rewards)
-                training_stats["curriculum_progress"].append(stage_info)
-                
-                if eval_reward > self.best_avg_reward:
-                    self.best_avg_reward = eval_reward
-                    self._save_agent(f"{config.system.model_dir}/{self.algorithm}_best.pth")
+                if eval_reward > self.best_reward:
+                    self.best_reward = eval_reward
+                    self._save_model(f"models/{self.algorithm}_best.pth")
                 
                 if verbose:
-                    eps = getattr(self.agent, "epsilon", 0)
-                    loss_str = f"{episode_loss:.4f}" if episode_loss is not None else "N/A"
-                    stage_str = stage_info.get("stage_name", "N/A")
-                    print(f"[{self.algorithm.upper()}] Ep {episode}: Train={episode_reward:.1f}, Eval={eval_reward:.1f}, Stage={stage_str}, Eps={eps:.4f}, Loss={loss_str}")
+                    recent = np.mean(self.episode_rewards[-eval_interval:]) if len(self.episode_rewards) >= eval_interval else 0
+                    print(f"[{self.algorithm.upper()}] Ep {episode}: Train={episode_reward:.2f}, "
+                          f"Eval={eval_reward:.2f}, RecentAvg={recent:.2f}")
             
-            if episode > 0 and episode % config.system.save_interval == 0:
-                self._save_agent(f"{config.system.model_dir}/{self.algorithm}_ep{episode}.pth")
+            # Save checkpoint
+            if episode > 0 and episode % 200 == 0:
+                self._save_model(f"models/{self.algorithm}_ep{episode}.pth")
         
-        self._save_agent(f"{config.system.model_dir}/{self.algorithm}_final.pth")
-        return training_stats
+        self._save_model(f"models/{self.algorithm}_final.pth")
+        return stats
 
-    def _train_episode(self) -> Tuple[float, int, Optional[float]]:
-        state = self._reset_episode()
+    def _run_episode(self) -> float:
+        state = self.env_wrapper.reset()
         episode_reward = 0.0
-        episode_loss = None
-        step = 0
+        steps = 0
+        max_steps = 150
         
-        max_steps = 300
-        if self.simulator.curriculum:
-            max_steps = self.simulator.curriculum.get_current_stage()["max_steps"]
-        else:
-            max_steps = 500
-        
-        while step < max_steps:
-            state_array = self._get_state_array(state)
-            
-            if self.simulator.domain_randomizer:
-                state_array = self.simulator.domain_randomizer.apply_noise(state_array)
-            
-            action = self.agent.get_action(state_array, training=True)
-            label, score = self.simulator.simulate_step(action)
-            next_state, reward, done = self._execute_step(state, action, label, score)
+        while steps < max_steps:
+            action = self.agent.get_action(state, training=True)
+            next_state, reward, done = self.env_wrapper.step(action)
             
             if self.algorithm == "ppo":
                 self.agent.record_step(reward, done)
-                if done or step >= self.agent.trajectory_size - 1:
-                    episode_loss = self._ppo_update()
             else:
-                loss = self.agent.update(state_array, action, reward, 
-                                        self._get_state_array(next_state), done)
-                if loss is not None:
-                    episode_loss = loss
+                self.agent.update(state, action, reward, next_state, done)
+                self.agent.decay_epsilon()
             
             episode_reward += reward
             state = next_state
-            step += 1
+            steps += 1
             
             if done:
                 break
         
-        if self.algorithm == "dqn":
-            self.agent.decay_epsilon()
+        # PPO update at end of episode
+        if self.algorithm == "ppo":
+            self.agent.update(0.0)
         
-        self.simulator.episode_count += 1
-        return episode_reward, step, episode_loss
+        return episode_reward
 
-    def _ppo_update(self) -> Optional[float]:
-        losses = self.agent.update(0.0)
-        return losses.get("loss") if losses else None
-
-    def _reset_episode(self) -> PostureState:
-        if random.random() < 0.25:
-            self.simulator.switch_user()
-        self.simulator.reset_current_user()
-        return PostureState(
-            posture_label=encode_label(PostureLabel.GOOD),
-            posture_score=0.8,
-            duration_bad_posture=0.0,
-            time_since_alert=0.0,
-            recent_corrections=[],
-            consecutive_alerts=0,
-        )
-
-    def _get_state_array(self, state: PostureState) -> np.ndarray:
-        return state.to_array()
-
-    def _execute_step(self, state: PostureState, action: int, label: PostureLabel, 
-                      score: float) -> Tuple[PostureState, float, bool]:
-        env = PostureEnvironment()
-        env.current_state = state
-        return env.step(action, label, score)
-
-    def _evaluate(self, num_episodes: int = 10) -> float:
+    def _evaluate(self, num_eval: int = 5) -> float:
         eval_rewards = []
-        for _ in range(num_episodes):
-            state = self._reset_episode()
+        
+        for _ in range(num_eval):
+            state = self.env_wrapper.reset()
             episode_reward = 0.0
-            step = 0
-            while step < 200:
-                state_array = self._get_state_array(state)
-                action = self.agent.get_action(state_array, training=False)
-                label, score = self.simulator.simulate_step(action)
-                next_state, reward, done = self._execute_step(state, action, label, score)
+            steps = 0
+            max_steps = 150
+            
+            while steps < max_steps:
+                action = self.agent.get_action(state, training=False)
+                next_state, reward, done = self.env_wrapper.step(action)
+                
                 episode_reward += reward
                 state = next_state
-                step += 1
+                steps += 1
+                
                 if done:
                     break
+            
             eval_rewards.append(episode_reward)
+        
         return np.mean(eval_rewards)
 
-    def _save_agent(self, path: str):
+    def _save_model(self, path: str):
         os.makedirs(os.path.dirname(path) if os.path.dirname(path) else ".", exist_ok=True)
         self.agent.save(path)
 
 
-class ComparisonBenchmark:
-    def __init__(self, simulator: TrainingSimulator):
-        self.simulator = simulator
-
-    def benchmark_agent(self, agent, algorithm_name: str, num_episodes: int = 100) -> Dict[str, Any]:
-        total_alerts = 0
-        successful_corrections = 0
-        cumulative_reward = 0.0
-        posture_scores = []
-        episode_rewards = []
-        best_streaks = []
-        
-        for _ in range(num_episodes):
-            self.simulator.reset_current_user()
-            state = self._create_initial_state()
-            episode_reward = 0.0
-            current_streak = 0
-            max_streak = 0
-            step = 0
-            
-            while step < 200:
-                state_array = state.to_array()
-                action = agent.get_action(state_array, training=False)
-                if action != Action.NO_FEEDBACK.value:
-                    total_alerts += 1
-                
-                label, score = self.simulator.simulate_step(action)
-                env = PostureEnvironment()
-                env.current_state = state
-                next_state, reward, done = env.step(action, label, score)
-                
-                was_bad = state.posture_label != PostureLabel.GOOD.value
-                is_good = label == PostureLabel.GOOD
-                if was_bad and is_good and action != Action.NO_FEEDBACK.value:
-                    successful_corrections += 1
-                    current_streak += 1
-                    max_streak = max(max_streak, current_streak)
-                elif action != Action.NO_FEEDBACK.value:
-                    current_streak = 0
-                
-                episode_reward += reward
-                cumulative_reward += reward
-                posture_scores.append(score)
-                state = next_state
-                step += 1
-                if done:
-                    break
-            
-            episode_rewards.append(episode_reward)
-            best_streaks.append(max_streak)
-        
-        return {
-            "algorithm": algorithm_name,
-            "total_alerts": total_alerts,
-            "successful_corrections": successful_corrections,
-            "correction_rate": successful_corrections / total_alerts if total_alerts > 0 else 0,
-            "avg_posture_score": np.mean(posture_scores) if posture_scores else 0,
-            "cumulative_reward": cumulative_reward,
-            "avg_episode_reward": np.mean(episode_rewards),
-            "avg_best_streak": np.mean(best_streaks),
-            "total_episodes": num_episodes,
-        }
-
-    def benchmark_rule_based(self, num_episodes: int = 100) -> Dict[str, Any]:
-        from environment import RuleBasedEnvironment
-        env = RuleBasedEnvironment()
-        total_alerts = 0
-        successful_corrections = 0
-        cumulative_reward = 0.0
-        posture_scores = []
-        episode_rewards = []
-        
-        for _ in range(num_episodes):
-            self.simulator.reset_current_user()
-            episode_reward = 0.0
-            duration_bad = 0.0
-            current_time = 0.0
-            step = 0
-            while step < 200:
-                label, score = self.simulator.simulate_step(Action.NO_FEEDBACK.value)
-                if label != PostureLabel.GOOD:
-                    duration_bad += config.system.decision_interval
-                else:
-                    duration_bad = 0.0
-                should_alert, action = env.should_alert(label, duration_bad, current_time)
-                step_reward = 0.0
-                if should_alert:
-                    total_alerts += 1
-                    was_bad = label != PostureLabel.GOOD
-                    _, new_score = self.simulator.simulate_step(action)
-                    is_good = new_score >= 0.7 if new_score else False
-                    if was_bad and is_good:
-                        successful_corrections += 1
-                        step_reward = config.reward.posture_improve
-                    else:
-                        step_reward = config.reward.alert_ignored
-                else:
-                    if label == PostureLabel.GOOD:
-                        step_reward = config.reward.sustained_good
-                    elif label != PostureLabel.UNKNOWN:
-                        step_reward = config.reward.posture_worsen
-                posture_scores.append(score)
-                episode_reward += step_reward
-                current_time += config.system.decision_interval
-                step += 1
-            episode_rewards.append(episode_reward)
-        
-        return {
-            "algorithm": "Rule-Based",
-            "total_alerts": total_alerts,
-            "successful_corrections": successful_corrections,
-            "correction_rate": successful_corrections / total_alerts if total_alerts > 0 else 0,
-            "avg_posture_score": np.mean(posture_scores) if posture_scores else 0,
-            "cumulative_reward": cumulative_reward,
-            "avg_episode_reward": np.mean(episode_rewards),
-            "total_episodes": num_episodes,
-        }
-
-    def compare(self, agents: Dict[str, Any], num_episodes: int = 100) -> Dict[str, Any]:
-        results = {}
-        for name, agent in agents.items():
-            results[name] = self.benchmark_agent(agent, name, num_episodes)
-        results["rule_based"] = self.benchmark_rule_based(num_episodes)
-        return results
-
-    def _create_initial_state(self) -> PostureState:
-        return PostureState(
-            posture_label=encode_label(PostureLabel.GOOD),
-            posture_score=0.8,
-            duration_bad_posture=0.0,
-            time_since_alert=0.0,
-            recent_corrections=[],
-            consecutive_alerts=0,
-        )
+def _save_training_results(algo: str, stats: Dict[str, Any], num_episodes: int, 
+                          num_users: int, difficulty: str):
+    """Save training results to JSON file with timestamp"""
+    os.makedirs("results", exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    results = {
+        "algorithm": algo,
+        "episodes": num_episodes,
+        "users": num_users,
+        "difficulty": difficulty,
+        "timestamp": datetime.now().isoformat(),
+        "episode_rewards": stats.get("episode_rewards", []),
+        "eval_rewards": stats.get("eval_rewards", []),
+        "final_eval_reward": stats.get("eval_rewards", [0])[-1] if stats.get("eval_rewards") else 0,
+        "best_eval_reward": max(stats.get("eval_rewards", [0])) if stats.get("eval_rewards") else 0,
+    }
+    
+    filename = f"results/{algo}_{timestamp}.json"
+    with open(filename, "w") as f:
+        json.dump(results, f, indent=2)
+    print(f"Saved training results to: {filename}")
 
 
-def train_ppo(num_episodes: int = 500, num_users: int = 5, verbose: bool = True,
-               enable_curriculum: bool = True) -> Dict[str, Any]:
+def train_ppo(num_episodes: int = 2000, num_users: int = 8, verbose: bool = True,
+              difficulty: str = "medium") -> Dict[str, Any]:
     from rl_ppo_agent import PPOPPOAgent
-    agent = PPOPPOAgent(state_size=6, action_size=3)
-    simulator = TrainingSimulator(num_users=num_users, enable_curriculum=enable_curriculum)
-    trainer = UnifiedTrainer(agent, simulator, num_episodes=num_episodes, algorithm="ppo",
-                            enable_curriculum=enable_curriculum)
+    agent = PPOPPOAgent(state_size=18, action_size=3)
+    simulator = TrainingSimulator(num_users=num_users, difficulty=difficulty)
+    trainer = UnifiedTrainer(agent, simulator, num_episodes=num_episodes, algorithm="ppo")
     stats = trainer.train(verbose=verbose)
+    _save_training_results("ppo", stats, num_episodes, num_users, difficulty)
     return stats
 
 
-def train_dqn(num_episodes: int = 500, num_users: int = 5, verbose: bool = True,
-               enable_curriculum: bool = True) -> Dict[str, Any]:
+def train_dqn(num_episodes: int = 2000, num_users: int = 8, verbose: bool = True,
+              difficulty: str = "medium") -> Dict[str, Any]:
     from rl_agent import DQNAgent
-    agent = DQNAgent(state_size=6, action_size=3)
-    simulator = TrainingSimulator(num_users=num_users, enable_curriculum=enable_curriculum)
-    trainer = UnifiedTrainer(agent, simulator, num_episodes=num_episodes, algorithm="dqn",
-                            enable_curriculum=enable_curriculum)
+    agent = DQNAgent(state_size=18, action_size=3)
+    simulator = TrainingSimulator(num_users=num_users, difficulty=difficulty)
+    trainer = UnifiedTrainer(agent, simulator, num_episodes=num_episodes, algorithm="dqn")
     stats = trainer.train(verbose=verbose)
+    _save_training_results("dqn", stats, num_episodes, num_users, difficulty)
     return stats
 
 
-def compare_algorithms(num_episodes: int = 100, num_users: int = 5, ppo_path: str = None, 
-                      dqn_path: str = None) -> Dict[str, Any]:
+def benchmark(agent, num_episodes: int = 100, difficulty: str = "medium") -> Dict[str, Any]:
+    """Run benchmark to evaluate agent performance"""
+    simulator = TrainingSimulator(num_users=8, difficulty=difficulty)
+    env_wrapper = PPOEnvWrapper(simulator)
+    
+    total_alerts = 0
+    total_corrections = 0
+    episode_rewards = []
+    
+    for _ in range(num_episodes):
+        state = env_wrapper.reset()
+        episode_reward = 0.0
+        steps = 0
+        max_steps = 150
+        
+        while steps < max_steps:
+            action = agent.get_action(state, training=False)
+            
+            # Count alerts
+            if action != Action.NO_FEEDBACK.value:
+                total_alerts += 1
+            
+            # Check if this was a successful correction
+            old_user = simulator.get_current_user()
+            old_label, _ = old_user.get_posture()
+            was_bad = (old_label != PostureLabel.GOOD)
+            
+            next_state, reward, done = env_wrapper.step(action)
+            
+            # Check if correction was successful
+            new_label, _ = simulator.get_current_user().get_posture()
+            is_good = (new_label == PostureLabel.GOOD)
+            
+            if was_bad and is_good and action != Action.NO_FEEDBACK.value:
+                total_corrections += 1
+            
+            episode_reward += reward
+            state = next_state
+            steps += 1
+            
+            if done:
+                break
+        
+        episode_rewards.append(episode_reward)
+    
+    return {
+        "total_alerts": total_alerts,
+        "total_corrections": total_corrections,
+        "correction_rate": total_corrections / max(1, total_alerts),
+        "avg_episode_reward": np.mean(episode_rewards),
+        "avg_steps": np.mean([min(150, len(episode_rewards))]),
+    }
+
+
+def compare_algorithms(ppo_path: str = None, dqn_path: str = None, 
+                       num_episodes: int = 50, difficulty: str = "medium") -> Dict[str, Any]:
     from rl_ppo_agent import PPOPPOAgent
     from rl_agent import DQNAgent
-    simulator = TrainingSimulator(num_users=num_users, enable_curriculum=False)
-    benchmark = ComparisonBenchmark(simulator)
-    agents = {}
-    ppo_agent = PPOPPOAgent(state_size=6, action_size=3)
+    
+    results = {}
+    
     if ppo_path and os.path.exists(ppo_path):
+        ppo_agent = PPOPPOAgent(state_size=18, action_size=3)
         ppo_agent.load(ppo_path)
-    agents["PPO"] = ppo_agent
-    dqn_agent = DQNAgent(state_size=6, action_size=3)
+        results["PPO"] = benchmark(ppo_agent, num_episodes, difficulty)
+    
     if dqn_path and os.path.exists(dqn_path):
+        dqn_agent = DQNAgent(state_size=18, action_size=3)
         dqn_agent.load(dqn_path)
-    agents["DQN"] = dqn_agent
-    results = benchmark.compare(agents, num_episodes)
+        results["DQN"] = benchmark(dqn_agent, num_episodes, difficulty)
+    
     return results
 
 
 if __name__ == "__main__":
-    import random
     random.seed(42)
     np.random.seed(42)
-    print("Testing Enhanced Training with Curriculum Learning...")
-    print("-" * 60)
     
-    print("\nTesting PPO Training (short run with curriculum)...")
-    stats = train_ppo(num_episodes=100, num_users=3, verbose=True, enable_curriculum=True)
-    print(f"Final eval: {stats['eval_rewards'][-1] if stats['eval_rewards'] else 0:.2f}")
+    print("="*60)
+    print("Training PPO Agent")
+    print("="*60)
+    ppo_stats = train_ppo(num_episodes=200, num_users=8, verbose=True, difficulty="medium")
+    print(f"PPO Final Eval: {ppo_stats['eval_rewards'][-1] if ppo_stats['eval_rewards'] else 0:.2f}")
     
-    print("\nTesting DQN Training (short run with curriculum)...")
-    stats = train_dqn(num_episodes=100, num_users=3, verbose=True, enable_curriculum=True)
-    print(f"Final eval: {stats['eval_rewards'][-1] if stats['eval_rewards'] else 0:.2f}")
+    print("\n" + "="*60)
+    print("Training DQN Agent")
+    print("="*60)
+    dqn_stats = train_dqn(num_episodes=200, num_users=8, verbose=True, difficulty="medium")
+    print(f"DQN Final Eval: {dqn_stats['eval_rewards'][-1] if dqn_stats['eval_rewards'] else 0:.2f}")
     
-    print("\nComparing algorithms...")
-    results = compare_algorithms(num_episodes=50, num_users=3)
+    print("\n" + "="*60)
+    print("Benchmark Comparison")
+    print("="*60)
+    results = compare_algorithms(
+        ppo_path="models/ppo_best.pth",
+        dqn_path="models/dqn_best.pth",
+        num_episodes=50,
+        difficulty="medium"
+    )
+    
     for algo, metrics in results.items():
-        print(f"{algo}: Correction Rate={metrics['correction_rate']:.4f}, "
-              f"Avg Reward={metrics['avg_episode_reward']:.2f}, "
-              f"Avg Streak={metrics.get('avg_best_streak', 0):.1f}")
+        print(f"\n{algo}:")
+        print(f"  Correction Rate: {metrics['correction_rate']:.2%}")
+        print(f"  Avg Episode Reward: {metrics['avg_episode_reward']:.2f}")
+        print(f"  Total Alerts: {metrics['total_alerts']}")
+        print(f"  Successful Corrections: {metrics['total_corrections']}")

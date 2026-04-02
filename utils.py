@@ -112,18 +112,18 @@ class SessionLogger:
 
     def get_summary(self) -> Dict[str, Any]:
         summary = {
-            "session_name": self.data["session_name"], "total_runtime": self.data["total_runtime"],
+            "session_name": self.data["session_name"], "total_runtime": float(self.data["total_runtime"]),
             "total_frames": len(self.data["posture_scores"]),
             "alerts_sent": self.data["alerts_sent"], "corrections_made": self.data["corrections_made"],
         }
         if self.data["posture_scores"]:
             scores = self.data["posture_scores"]
-            summary["avg_posture_score"] = np.mean(scores)
-            summary["max_posture_score"] = np.max(scores)
-            summary["min_posture_score"] = np.min(scores)
+            summary["avg_posture_score"] = float(np.mean(scores))
+            summary["max_posture_score"] = float(np.max(scores))
+            summary["min_posture_score"] = float(np.min(scores))
         if self.data["rewards"]:
-            summary["total_reward"] = np.sum(self.data["rewards"])
-            summary["avg_reward"] = np.mean(self.data["rewards"])
+            summary["total_reward"] = float(np.sum(self.data["rewards"]))
+            summary["avg_reward"] = float(np.mean(self.data["rewards"]))
         return summary
 
 

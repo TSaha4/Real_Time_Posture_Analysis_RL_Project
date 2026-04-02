@@ -8,10 +8,11 @@ import uuid
 from datetime import datetime
 
 from config import config
-from posture_module import PostureLabel, RuleBasedClassifier, encode_label, PostureClassifier
+from posture_module import PostureLabel, RuleBasedClassifier, AdaptiveThresholdClassifier, encode_label, PostureClassifier
 from environment import PostureEnvironment, RuleBasedEnvironment, Action, PostureState
 from feedback import VisualFeedback, FeedbackLevel
 from utils import MetricsLogger, SessionLogger, RateCalculator, setup_directories, validate_config
+from algorithm_selector import AlgorithmSelector, create_algorithm_selector
 
 
 class PostureSystem:
@@ -19,7 +20,8 @@ class PostureSystem:
                  enable_audio: bool = False, enable_multicamera: bool = False,
                  enable_online_learning: bool = False, skip_calibration: bool = False,
                  enable_attention: bool = False, enable_hands: bool = False,
-                 enable_dashboard: bool = False, use_enhanced_training: bool = False):
+                 enable_dashboard: bool = False, use_enhanced_training: bool = False,
+                 enable_auto_switch: bool = True):
         self.algorithm = algorithm.lower()
         self.camera_id = camera_id
         self.enable_audio = enable_audio
@@ -30,6 +32,7 @@ class PostureSystem:
         self.enable_hands = enable_hands
         self.enable_dashboard = enable_dashboard
         self.use_enhanced_training = use_enhanced_training
+        self.enable_auto_switch = enable_auto_switch
         self.cap = None
         self.cap_side = None
         self.pose_detector = None
@@ -54,7 +57,17 @@ class PostureSystem:
         self.current_action_name = "no_feedback"
         self.online_learning_buffer = []
         self.online_learning_counter = 0
-        
+
+        # NEW: Suggestion effectiveness tracking
+        self.suggestion_effectiveness = {}  # suggestion -> [(score_before, score_after), ...]
+        self.last_suggestion_time = 0
+        self.last_score_before_suggestion = 0.8
+
+        # NEW: Continuous recalibration tracking
+        self.good_posture_streak = 0
+        self.recalibration_samples = []
+        self.recalibration_threshold = 1800  # ~60 sec at 30fps
+
         self.unified_analyzer = None
         self.dashboard_exporter = None
         self.current_session_id = None
@@ -73,17 +86,42 @@ class PostureSystem:
         if not validate_config():
             print("Configuration validation failed")
             return False
-        if self.algorithm != "rule":
+        # Load agent for ppo/dqn (not for rule or auto - use ppo as default)
+        if self.algorithm in ["ppo", "dqn"]:
             print(f"Loading {self.algorithm.upper()} agent...")
             self.rl_agent = self._load_agent()
             if self.rl_agent is None:
                 print(f"No trained {self.algorithm.upper()} agent found. Please train first.")
                 return False
+        elif self.algorithm == "auto":
+            # For auto mode, load both PPO and DQN agents
+            print("Loading PPO agent for auto-switch mode...")
+            from rl_ppo_agent import PPOPPOAgent
+            self.rl_agent = PPOPPOAgent(state_size=config.rl.state_size, action_size=config.rl.action_size)
+            if not self.rl_agent.load(f"{config.system.model_dir}/ppo_final.pth"):
+                print("No trained PPO agent found. Please train first.")
+                return False
+            # Note: DQN will be loaded when needed
+            
         print("Initializing pose detector...")
         from pose_module import PoseDetector, PoseAnalyzer
         self.pose_detector = PoseDetector()
         self.pose_analyzer = PoseAnalyzer()
+
+        # Use RuleBasedClassifier - more robust without baseline
+        self.classifier = RuleBasedClassifier()
         
+        # Initialize auto-switching algorithm selector
+        if self.enable_auto_switch:
+            print("Initializing auto-switching algorithm selector...")
+            self.algorithm_selector = create_algorithm_selector(
+                evaluation_interval=30.0,
+                switch_threshold=0.10,
+                min_alerts=5
+            )
+        else:
+            self.algorithm_selector = None
+
         if self.enable_attention or self.enable_hands:
             print("Initializing unified analyzer...")
             from combined_analyzer import create_unified_analyzer
@@ -125,12 +163,12 @@ class PostureSystem:
     def _load_agent(self):
         if self.algorithm == "ppo":
             from rl_ppo_agent import PPOPPOAgent
-            agent = PPOPPOAgent(state_size=6, action_size=3)
+            agent = PPOPPOAgent(state_size=config.rl.state_size, action_size=config.rl.action_size)
             if agent.load(f"{config.system.model_dir}/ppo_final.pth"):
                 return agent
         elif self.algorithm == "dqn":
             from rl_agent import DQNAgent
-            agent = DQNAgent(state_size=6, action_size=3)
+            agent = DQNAgent(state_size=config.rl.state_size, action_size=config.rl.action_size)
             if agent.load(f"{config.system.model_dir}/dqn_final.pth"):
                 return agent
         return None
@@ -139,10 +177,13 @@ class PostureSystem:
         print(f"\n{'='*60}\nCALIBRATION PHASE\n{'='*60}")
         print(f"Position yourself in good posture. Keep still for ~{self.calibration_target} frames.")
         print("Press 'c' to capture and continue, 'q' to quit\n")
-        
+
+        # Reset EMA to ensure clean baseline computation
+        self.pose_analyzer.reset_ema()
+
         cv2.namedWindow(config.feedback.window_name, cv2.WINDOW_NORMAL)
         self._resize_window_to_fit_screen()
-        
+
         calibration_frame_count = 0
         frame_timestamp = 0
         start_time = time.time()
@@ -225,16 +266,24 @@ class PostureSystem:
             return self._get_default_baseline()
         baseline = {}
         for key in features_list[0].keys():
-            baseline[key] = np.mean([f[key] for f in features_list])
+            values = [f[key] for f in features_list]
+            # Use median for robustness against outliers
+            median_val = np.median(values)
+            std_val = np.std(values)
+            # Reject outliers beyond 2 std dev
+            filtered = [v for v in values if abs(v - median_val) <= 2 * std_val]
+            baseline[key] = np.mean(filtered) if filtered else median_val
         return baseline
     
     def _get_default_baseline(self) -> dict:
         return {
             "neck_angle": 90.0,
-            "shoulder_diff": 5.0,
-            "shoulder_alignment": 10.0,
-            "spine_inclination": 0.0,
-            "forward_head_y": 15.0,
+            "shoulder_diff": 8.0,  # Increased from 5 - more realistic for webcam
+            "shoulder_alignment": 15.0,  # Increased from 10 - more lenient
+            "spine_inclination": 5.0,  # Increased from 0 - accounts for camera angle
+            "forward_head_y": 20.0,  # Increased from 15 - more realistic
+            "head_tilt": 3.0,  # NEW - more lenient
+            "elbow_asymmetry": 5.0,  # NEW - more lenient
         }
     
     def use_default_calibration(self):
@@ -275,9 +324,17 @@ class PostureSystem:
                     features = self._adjust_features_relative_to_baseline(features)
                     new_label, new_score = self.classifier.classify(features)
                     if new_label != self.current_label:
+                        # NEW: Track suggestion effectiveness when label changes
+                        if self.current_suggestion and self.current_suggestion != "Calibration needed":
+                            self._track_suggestion_effectiveness(self.current_suggestion, self.last_score_before_suggestion, new_score)
                         self.current_label = new_label
                         self.current_suggestion = self.classifier.get_suggestion(self.current_label, features)
+                        self.last_suggestion_time = self.current_time
+                        self.last_score_before_suggestion = self.current_score
                     self.current_score = new_score
+
+                    # NEW: Continuous recalibration - track good posture streaks
+                    self._update_recalibration(new_score, keypoints)
                 else:
                     self.current_label, self.current_score = PostureLabel.UNKNOWN, 0.0
                     self.current_suggestion = "Calibration needed"
@@ -301,12 +358,31 @@ class PostureSystem:
             action = 0
             if self.current_time - self.last_decision_time >= config.system.decision_interval:
                 self.last_decision_time = self.current_time
-                if self.algorithm == "rule":
+                
+                # Get active algorithm (auto-switch or fixed)
+                active_algo = self._get_active_algorithm()
+                
+                if active_algo == "rule":
                     action = self._get_rule_action()
                 elif self.is_calibrated:
                     action = self._get_rl_action()
                     if self.enable_online_learning and self.rl_agent:
                         self._online_learning_update(action)
+                
+                # Update algorithm selector with action and score
+                if self.algorithm_selector:
+                    self.algorithm_selector.record_alert(action, self.current_score)
+                    self.algorithm_selector.record_posture_change(self.current_score)
+                    
+                    # Check if should switch algorithms
+                    if self.algorithm_selector.should_switch():
+                        new_algo = self.algorithm_selector.switch_algorithm()
+                        # Reload agent for new algorithm if needed
+                        if new_algo != "rule" and new_algo != self.algorithm:
+                            self._load_agent_for_algorithm(new_algo)
+                            self.algorithm = new_algo
+                            print(f"[Auto-Switch] Switched to {new_algo.upper()}")
+                
                 if self.rl_agent:
                     self.current_action_name = self.rl_agent.get_action_name(action)
                 else:
@@ -341,6 +417,26 @@ class PostureSystem:
         if len(self.online_learning_buffer) >= config.online_learning.batch_size:
             self.online_learning_buffer = self.online_learning_buffer[-config.online_learning.batch_size:]
 
+    def _get_active_algorithm(self) -> str:
+        """Get the currently active algorithm - either from auto-switch or fixed setting"""
+        if self.algorithm_selector and self.enable_auto_switch:
+            return self.algorithm_selector.get_active_algorithm()
+        # Handle "auto" as default to ppo when no selector
+        if self.algorithm == "auto":
+            return "ppo"
+        return self.algorithm
+    
+    def _load_agent_for_algorithm(self, algo: str):
+        """Load RL agent for specified algorithm"""
+        if algo == "ppo":
+            from rl_ppo_agent import PPOPPOAgent
+            self.rl_agent = PPOPPOAgent(state_size=config.rl.state_size, action_size=config.rl.action_size)
+            self.rl_agent.load(f"{config.system.model_dir}/ppo_final.pth")
+        elif algo == "dqn":
+            from rl_agent import DQNAgent
+            self.rl_agent = DQNAgent(state_size=config.rl.state_size, action_size=config.rl.action_size)
+            self.rl_agent.load(f"{config.system.model_dir}/dqn_final.pth")
+
     def _get_rl_action(self) -> int:
         if self.current_state is None:
             self.current_state = PostureState.from_posture(self.current_label, self.current_score)
@@ -353,6 +449,44 @@ class PostureSystem:
             self.current_label, self.current_state.duration_bad_posture if self.current_state else 0, self.current_time)
         return action
 
+    def _update_recalibration(self, new_score: float, keypoints: dict):
+        if new_score >= 0.65:
+            self.good_posture_streak += 1
+        else:
+            self.good_posture_streak = 0
+        
+        if self.good_posture_streak >= self.recalibration_threshold:
+            if keypoints:
+                self.recalibration_samples.append(keypoints)
+            if len(self.recalibration_samples) >= 10:
+                new_baseline = self._compute_baseline_from_samples()
+                if new_baseline:
+                    self.baseline = new_baseline
+                    self.classifier.set_baseline(self.baseline)
+                    self.recalibration_samples = []
+                    self.good_posture_streak = 0
+
+    def _track_suggestion_effectiveness(self, suggestion: str, score_before: float, score_after: float):
+        if suggestion not in self.suggestion_effectiveness:
+            self.suggestion_effectiveness[suggestion] = []
+        self.suggestion_effectiveness[suggestion].append((score_before, score_after))
+
+    def _compute_baseline_from_samples(self) -> dict:
+        if not self.recalibration_samples:
+            return None
+        features_list = []
+        for sample in self.recalibration_samples:
+            features = self.pose_analyzer.compute_posture_features(sample)
+            if features:
+                features_list.append(features)
+        if not features_list:
+            return None
+        baseline = {}
+        for key in features_list[0].keys():
+            values = [f[key] for f in features_list]
+            baseline[key] = np.mean(values)
+        return baseline
+
     def _adjust_features_relative_to_baseline(self, features: dict) -> dict:
         adjusted = features.copy()
         if self.baseline:
@@ -362,6 +496,9 @@ class PostureSystem:
                 adjusted["shoulder_diff"] = abs(features.get("shoulder_diff", 0) - base_features.get("shoulder_diff", 0))
                 adjusted["spine_inclination"] = features.get("spine_inclination", 0) - base_features.get("spine_inclination", 0)
                 adjusted["forward_head_y"] = features.get("forward_head_y", 0) - base_features.get("forward_head_y", 0)
+                # NEW: Handle head_tilt and elbow_asymmetry
+                adjusted["head_tilt"] = features.get("head_tilt", 0) - base_features.get("head_tilt", 0)
+                adjusted["elbow_asymmetry"] = abs(features.get("elbow_asymmetry", 0) - base_features.get("elbow_asymmetry", 0))
         return adjusted
 
     def _draw_overlay(self, frame: np.ndarray, action_name: str) -> np.ndarray:
@@ -582,65 +719,44 @@ class AttentionTrackingSystem:
 
 
 def train_agent(algorithm: str = "ppo", num_episodes: int = 500, num_users: int = 5, 
-                enhanced: bool = False):
-    if enhanced:
-        from simulation_enhanced import UnifiedTrainer, TrainingSimulator
-        from rl_ppo_agent import PPOPPOAgent
-        from rl_agent import DQNAgent
-        print(f"Enhanced Training: {algorithm.upper()} agent for {num_episodes} episodes...")
-        if algorithm.lower() == "ppo":
-            agent = PPOPPOAgent(state_size=6, action_size=3)
-        elif algorithm.lower() == "dqn":
-            agent = DQNAgent(state_size=6, action_size=3)
-        else:
-            print(f"Unknown algorithm: {algorithm}")
-            return None
-        simulator = TrainingSimulator(num_users=num_users, enable_curriculum=True)
-        trainer = UnifiedTrainer(agent, simulator, num_episodes=num_episodes, algorithm=algorithm)
-        stats = trainer.train()
+                enhanced: bool = False, difficulty: str = "medium"):
+    from simulation_enhanced import train_ppo, train_dqn
+    import random
+    random.seed(42)
+    
+    print(f"Enhanced Training: {algorithm.upper()} agent for {num_episodes} episodes...")
+    if algorithm.lower() == "ppo":
+        stats = train_ppo(num_episodes=num_episodes, num_users=num_users, 
+                        verbose=True, difficulty=difficulty)
+    elif algorithm.lower() == "dqn":
+        stats = train_dqn(num_episodes=num_episodes, num_users=num_users,
+                        verbose=True, difficulty=difficulty)
     else:
-        from simulation import train_ppo, train_dqn
-        print(f"Training {algorithm.upper()} agent for {num_episodes} episodes...")
-        if algorithm.lower() == "ppo":
-            stats = train_ppo(num_episodes=num_episodes, num_users=num_users)
-        elif algorithm.lower() == "dqn":
-            stats = train_dqn(num_episodes=num_episodes, num_users=num_users)
-        else:
-            print(f"Unknown algorithm: {algorithm}")
-            return None
+        print(f"Unknown algorithm: {algorithm}")
+        return None
     print(f"\nTraining complete! Final eval reward: {stats['eval_rewards'][-1] if stats['eval_rewards'] else 0:.2f}")
     return stats
 
 
-def train_both(num_episodes: int = 500, num_users: int = 5, enhanced: bool = False):
-    if enhanced:
-        from simulation_enhanced import UnifiedTrainer, TrainingSimulator
-        from rl_ppo_agent import PPOPPOAgent
-        from rl_agent import DQNAgent
-        
-        print("=" * 60 + "\nEnhanced Training - PPO agent\n" + "=" * 60)
-        ppo_agent = PPOPPOAgent(state_size=6, action_size=3)
-        ppo_simulator = TrainingSimulator(num_users=num_users, enable_curriculum=True)
-        ppo_trainer = UnifiedTrainer(ppo_agent, ppo_simulator, num_episodes=num_episodes, algorithm="ppo")
-        ppo_stats = ppo_trainer.train()
-        
-        print("\n" + "=" * 60 + "\nEnhanced Training - DQN agent\n" + "=" * 60)
-        dqn_agent = DQNAgent(state_size=6, action_size=3)
-        dqn_simulator = TrainingSimulator(num_users=num_users, enable_curriculum=True)
-        dqn_trainer = UnifiedTrainer(dqn_agent, dqn_simulator, num_episodes=num_episodes, algorithm="dqn")
-        dqn_stats = dqn_trainer.train()
-    else:
-        from simulation import train_ppo, train_dqn
-        print("=" * 60 + "\nTraining PPO agent...\n" + "=" * 60)
-        ppo_stats = train_ppo(num_episodes=num_episodes, num_users=num_users)
-        print("\n" + "=" * 60 + "\nTraining DQN agent...\n" + "=" * 60)
-        dqn_stats = train_dqn(num_episodes=num_episodes, num_users=num_users)
+def train_both(num_episodes: int = 500, num_users: int = 5, enhanced: bool = False, 
+              difficulty: str = "medium"):
+    from simulation_enhanced import train_ppo, train_dqn
+    import random
+    random.seed(42)
+    
+    print("=" * 60 + "\nEnhanced Training - PPO agent\n" + "=" * 60)
+    ppo_stats = train_ppo(num_episodes=num_episodes, num_users=num_users,
+                        verbose=True, difficulty=difficulty)
+    
+    print("\n" + "=" * 60 + "\nEnhanced Training - DQN agent\n" + "=" * 60)
+    dqn_stats = train_dqn(num_episodes=num_episodes, num_users=num_users,
+                        verbose=True, difficulty=difficulty)
     print(f"\n{'='*60}\nTraining Complete!\nPPO: {ppo_stats['eval_rewards'][-1] if ppo_stats['eval_rewards'] else 0:.2f}\nDQN: {dqn_stats['eval_rewards'][-1] if dqn_stats['eval_rewards'] else 0:.2f}\n{'='*60}")
     return {"ppo": ppo_stats, "dqn": dqn_stats}
 
 
 def compare_agents(num_episodes: int = 100, num_users: int = 5):
-    from simulation import compare_algorithms
+    from simulation_enhanced import compare_algorithms
     print("=" * 60 + "\nComparing PPO vs DQN vs Rule-Based\n" + "=" * 60)
     results = compare_algorithms(num_episodes=num_episodes, num_users=num_users,
                                   ppo_path=f"{config.system.model_dir}/ppo_final.pth",
@@ -658,10 +774,13 @@ def compare_agents(num_episodes: int = 100, num_users: int = 5):
 def main():
     parser = argparse.ArgumentParser(description="UPRYT - Real-Time Posture Analysis with RL")
     parser.add_argument("--mode", choices=["realtime", "hand", "attention", "combined", "train", "compare", "train-all"], default="realtime")
-    parser.add_argument("--algorithm", choices=["ppo", "dqn", "rule"], default="ppo")
+    parser.add_argument("--algorithm", choices=["ppo", "dqn", "rule", "auto"], default="ppo",
+                       help="ppo/dqn/rule or 'auto' for automatic algorithm selection")
     parser.add_argument("--camera", type=int, default=0)
     parser.add_argument("--episodes", type=int, default=500)
     parser.add_argument("--users", type=int, default=5)
+    parser.add_argument("--difficulty", choices=["easy", "medium", "hard"], default="medium",
+                       help="Training difficulty level")
     parser.add_argument("--audio", action="store_true", help="Enable audio alerts")
     parser.add_argument("--multi-camera", action="store_true", help="Enable multi-camera support")
     parser.add_argument("--online-learning", action="store_true", help="Enable online learning")
@@ -671,14 +790,18 @@ def main():
     parser.add_argument("--hands", action="store_true", help="Enable hand tracking")
     parser.add_argument("--dashboard", action="store_true", help="Enable dashboard export")
     parser.add_argument("--enhanced-training", action="store_true", help="Use enhanced training simulator")
+    parser.add_argument("--auto-switch", action="store_true", default=True,
+                       help="Enable automatic algorithm switching (enabled by default)")
+    parser.add_argument("--no-auto-switch", action="store_true",
+                       help="Disable automatic algorithm switching")
     args = parser.parse_args()
     
     enable_audio = args.audio and not args.no_audio
     
     if args.mode == "train":
-        train_agent(args.algorithm, args.episodes, args.users, args.enhanced_training)
+        train_agent(args.algorithm, args.episodes, args.users, args.enhanced_training, args.difficulty)
     elif args.mode == "train-all":
-        train_both(args.episodes, args.users, args.enhanced_training)
+        train_both(args.episodes, args.users, args.enhanced_training, args.difficulty)
     elif args.mode == "compare":
         compare_agents(num_episodes=100, num_users=args.users)
     elif args.mode == "hand":
@@ -702,7 +825,8 @@ def main():
             enable_attention=True,
             enable_hands=True,
             enable_dashboard=True,
-            use_enhanced_training=args.enhanced_training
+            use_enhanced_training=args.enhanced_training,
+            enable_auto_switch=args.algorithm == "auto" or not args.no_auto_switch
         )
         if not system.initialize():
             return 1
@@ -728,12 +852,15 @@ def main():
             enable_attention=args.attention,
             enable_hands=args.hands,
             enable_dashboard=args.dashboard,
-            use_enhanced_training=args.enhanced_training
+            use_enhanced_training=args.enhanced_training,
+            enable_auto_switch=args.algorithm == "auto" or not args.no_auto_switch
         )
         if not system.initialize():
             return 1
         
         if args.skip_calibration:
+            system.use_default_calibration()
+        elif args.algorithm == "auto":
             system.use_default_calibration()
         elif args.algorithm != "rule":
             if not system.run_calibration():

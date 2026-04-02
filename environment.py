@@ -25,6 +25,24 @@ class PostureState:
     recent_corrections: List[bool] = field(default_factory=list)
     consecutive_alerts: int = 0
 
+    # NEW: Raw geometric features (for better RL state representation)
+    neck_angle: float = 90.0
+    shoulder_diff: float = 0.0
+    spine_inclination: float = 0.0
+    forward_head_y: float = 0.0
+    head_tilt: float = 0.0
+
+    # NEW: Trend features (for temporal awareness)
+    score_velocity: float = 0.0  # Rate of score change
+    posture_trend: float = 0.0   # Improving/worsening
+    alert_frequency: float = 0.0  # Alerts per minute
+    time_in_bad_posture: float = 0.0
+
+    # NEW: User context (for personalization)
+    user_compliance: float = 0.7
+    user_fatigue: float = 0.0
+    correction_effectiveness: float = 0.5
+
     def to_array(self) -> np.ndarray:
         corrections_mean = np.mean(self.recent_corrections) if self.recent_corrections else 0.0
         corrections_recent = np.mean(self.recent_corrections[-5:]) if len(self.recent_corrections) >= 5 else corrections_mean
@@ -35,7 +53,37 @@ class PostureState:
             min(self.time_since_alert / 30.0, 1.0),
             corrections_recent,
             float(self.consecutive_alerts) / 5.0,
+            # Raw features (5)
+            (self.neck_angle - 90) / 30.0,  # normalized deviation from ideal
+            self.shoulder_diff / 30.0,
+            self.spine_inclination / 20.0,
+            self.forward_head_y / 30.0,
+            self.head_tilt / 15.0,
+            # Trend features (4)
+            max(-1, min(1, self.score_velocity)),
+            max(-1, min(1, self.posture_trend)),
+            self.alert_frequency / 5.0,
+            min(self.time_in_bad_posture / 60.0, 1.0),
+            # User context (3)
+            self.user_compliance,
+            self.user_fatigue,
+            self.correction_effectiveness,
         ], dtype=np.float32)
+
+    def update_trend(self, prev_score: float, prev_time: float):
+        """Update trend features based on previous state"""
+        if prev_time > 0 and self.time_since_alert > 0:
+            score_delta = self.posture_score - prev_score
+            time_delta = self.time_since_alert - prev_time
+            if time_delta > 0:
+                self.score_velocity = score_delta / time_delta
+            else:
+                self.score_velocity = 0.0
+
+        # Update posture trend (smoothed)
+        if len(self.recent_corrections) >= 3:
+            recent = self.recent_corrections[-3:]
+            self.posture_trend = np.mean(recent) * 2 - 1  # -1 to 1 scale
 
     @classmethod
     def from_posture(cls, label: PostureLabel, score: float) -> "PostureState":
@@ -46,6 +94,11 @@ class PostureState:
             time_since_alert=0.0,
             recent_corrections=[],
             consecutive_alerts=0,
+            neck_angle=90.0,
+            shoulder_diff=0.0,
+            spine_inclination=0.0,
+            forward_head_y=15.0,
+            head_tilt=0.0,
         )
 
 
@@ -111,11 +164,22 @@ class PostureEnvironment:
     def _compute_reward_no_action(self, new_score: float) -> float:
         if new_score is None:
             return config.reward.no_face_detected
-        if new_score >= 0.7:
-            return config.reward.sustained_good
-        elif new_score >= 0.4:
-            return 0.0
-        return config.reward.posture_worsen
+
+        prev_score = self.current_state.posture_score if self.current_state else 0.7
+
+        score_delta = new_score - prev_score
+        if score_delta > 0.01:
+            reward = 2.0 * score_delta
+        elif score_delta < -0.01:
+            reward = 3.0 * score_delta
+        else:
+            # Penalty for sustained bad posture (missed opportunity to correct)
+            if new_score < 0.5:
+                reward = -0.3
+            else:
+                reward = config.reward.sustained_good
+
+        return reward
 
     def _compute_reward_subtle_alert(self, new_label: PostureLabel, new_score: float) -> float:
         if new_label is None:
@@ -123,12 +187,20 @@ class PostureEnvironment:
         self.current_state.consecutive_alerts += 1
         self.current_state.time_since_alert = 0.0
         self.metrics.total_alerts += 1
+
         if new_label == PostureLabel.GOOD or (new_score and new_score >= 0.7):
             self.current_state.recent_corrections.append(True)
             self.metrics.successful_corrections += 1
-            return config.reward.posture_improve
-        self.current_state.recent_corrections.append(False)
-        return config.reward.alert_ignored
+            reward = config.reward.posture_improve * 0.8  # Reduced from 10.0 to 8.0
+            if self.current_state.consecutive_alerts == 1:
+                reward += 2.0
+        else:
+            self.current_state.recent_corrections.append(False)
+            reward = config.reward.alert_ignored * 0.8
+            if self.current_state.duration_bad_posture < 5.0:
+                reward += 0.5
+
+        return reward
 
     def _compute_reward_strong_alert(self, new_label: PostureLabel, new_score: float) -> float:
         if new_label is None:
@@ -136,15 +208,23 @@ class PostureEnvironment:
         self.current_state.consecutive_alerts += 1
         self.current_state.time_since_alert = 0.0
         self.metrics.total_alerts += 1
+
         if self.current_state.consecutive_alerts > 3:
             self.metrics.alert_fatigue_count += 1
-            return config.reward.alert_fatigue
+
         if new_label == PostureLabel.GOOD or (new_score and new_score >= 0.7):
             self.current_state.recent_corrections.append(True)
             self.metrics.successful_corrections += 1
-            return config.reward.posture_improve * 1.2
-        self.current_state.recent_corrections.append(False)
-        return config.reward.alert_ignored * 1.2
+            reward = config.reward.posture_improve
+            if self.current_state.consecutive_alerts == 1:
+                reward += 1.5
+        else:
+            self.current_state.recent_corrections.append(False)
+            reward = config.reward.alert_ignored
+            if self.current_state.duration_bad_posture < 5.0:
+                reward += 0.5
+
+        return reward
 
     def _update_posture_state(self, label: PostureLabel, score: float):
         if label is not None:

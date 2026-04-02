@@ -26,6 +26,9 @@ class UPRYTApplication:
         self._create_log_area()
         self._create_footer()
         
+        # Initialize mode-dependent UI state
+        self._on_mode_changed()
+        
         self._check_models()
     
     def _setup_styles(self):
@@ -64,7 +67,8 @@ class UPRYTApplication:
         mode_frame = ttk.LabelFrame(self.root, text="Select Mode", padding=15)
         mode_frame.pack(fill="x", padx=20, pady=10)
         
-        self.mode_var = tk.StringVar(value="combined")
+        # Default to train mode
+        self.mode_var = tk.StringVar(value="train")
         
         modes = [
             ("combined", "Combined Mode (Recommended)", "Full system: Posture + Attention + Hands + Dashboard", "🔄"),
@@ -87,9 +91,12 @@ class UPRYTApplication:
         self.options_notebook = ttk.Notebook(self.root)
         self.options_notebook.pack(fill="x", padx=20, pady=10)
         
-        self._create_realtime_tab()
-        self._create_training_tab()
-        self._create_features_tab()
+        self._create_realtime_tab()   # Tab 0
+        self._create_training_tab()   # Tab 1
+        self._create_features_tab()   # Tab 2
+        
+        # Initially select Training tab (safer default)
+        self.options_notebook.select(1)
     
     def _create_realtime_tab(self):
         realtime_frame = ttk.Frame(self.options_notebook, padding=15)
@@ -100,9 +107,9 @@ class UPRYTApplication:
         algo_frame = ttk.Frame(realtime_frame)
         algo_frame.pack(fill="x", pady=5)
         ttk.Label(algo_frame, text="Algorithm:").pack(side="left")
-        self.algorithm_var = tk.StringVar(value="ppo")
+        self.algorithm_var = tk.StringVar(value="auto")
         self.algorithm_combo = ttk.Combobox(algo_frame, textvariable=self.algorithm_var,
-                                            values=["ppo", "dqn", "rule"], state="readonly", width=12)
+                                            values=["ppo", "dqn", "rule", "auto"], state="readonly", width=12)
         self.algorithm_combo.pack(side="left", padx=(10, 20))
         
         camera_frame = ttk.Frame(realtime_frame)
@@ -196,25 +203,39 @@ class UPRYTApplication:
         mode = self.mode_var.get()
         
         if mode == "realtime":
-            self.algorithm_combo["values"] = ["ppo", "dqn", "rule"]
-            self.algorithm_var.set("ppo")
+            self.algorithm_combo["values"] = ["ppo", "dqn", "rule", "auto"]
+            self.algorithm_var.set("auto")
+            self.options_notebook.tab(0, state="normal")
+            self.options_notebook.tab(1, state="disabled")
             self.options_notebook.tab(2, state="normal")
+            self.options_notebook.select(0)
         elif mode == "combined":
-            self.algorithm_combo["values"] = ["ppo", "dqn", "rule"]
-            self.algorithm_var.set("ppo")
+            self.algorithm_combo["values"] = ["ppo", "dqn", "rule", "auto"]
+            self.algorithm_var.set("auto")
+            self.options_notebook.tab(0, state="normal")
+            self.options_notebook.tab(1, state="disabled")
             self.options_notebook.tab(2, state="normal")
+            self.options_notebook.select(0)
         elif mode == "hand":
             self.algorithm_combo["values"] = []
+            self.options_notebook.tab(0, state="disabled")
+            self.options_notebook.tab(1, state="disabled")
             self.options_notebook.tab(2, state="disabled")
         elif mode == "attention":
             self.algorithm_combo["values"] = []
+            self.options_notebook.tab(0, state="disabled")
+            self.options_notebook.tab(1, state="disabled")
             self.options_notebook.tab(2, state="disabled")
         elif mode == "train":
             self.algorithm_combo["values"] = []
+            self.options_notebook.tab(0, state="disabled")
             self.options_notebook.tab(1, state="normal")
+            self.options_notebook.tab(2, state="disabled")
             self.options_notebook.select(1)
+            self._log("NOTE: Training runs in background (no camera window)", "info")
         elif mode == "compare":
             self.algorithm_combo["values"] = []
+            self.options_notebook.tab(0, state="disabled")
             self.options_notebook.tab(1, state="disabled")
             self.options_notebook.tab(2, state="disabled")
         

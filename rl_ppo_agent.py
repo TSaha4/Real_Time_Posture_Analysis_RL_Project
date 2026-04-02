@@ -60,26 +60,33 @@ class ActorCritic(nn.Module):
 class PPOPPOAgent:
     def __init__(
         self, state_size: int = None, action_size: int = None, hidden_sizes: List[int] = None,
-        lr: float = 3e-4, gamma: float = 0.99, gae_lambda: float = 0.95,
+        lr: float = None, gamma: float = 0.99, gae_lambda: float = 0.95,
         clip_epsilon: float = 0.2, entropy_coef: float = 0.01, value_coef: float = 0.5,
-        max_grad_norm: float = 0.5, ppo_epochs: int = 10, batch_size: int = 64,
-        trajectory_size: int = 2048,
+        max_grad_norm: float = 0.5, ppo_epochs: int = 5, batch_size: int = None,  # epochs reduced to 5
+        trajectory_size: int = 128,
     ):
         self.state_size = state_size or config.rl.state_size
         self.action_size = action_size or config.rl.action_size
-        self.hidden_sizes = hidden_sizes or [128, 64, 32]
+        self.hidden_sizes = hidden_sizes or config.rl.hidden_sizes
         self.gamma = gamma
         self.gae_lambda = gae_lambda
         self.clip_epsilon = clip_epsilon
         self.entropy_coef = entropy_coef
         self.value_coef = value_coef
         self.max_grad_norm = max_grad_norm
-        self.ppo_epochs = ppo_epochs
-        self.batch_size = batch_size
+        self.ppo_epochs = ppo_epochs  # Reduced from 10 to 5
+        self.batch_size = batch_size or config.rl.batch_size
         self.trajectory_size = trajectory_size
+        
+        # LR scheduling
+        self.initial_lr = lr or config.rl.learning_rate
+        self.lr_decay = config.rl.lr_decay
+        self.lr_decay_interval = config.rl.lr_decay_interval
+        self.total_updates = 0
+        
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.policy = ActorCritic(self.state_size, self.action_size, self.hidden_sizes).to(self.device)
-        self.optimizer = optim.Adam(self.policy.parameters(), lr=lr)
+        self.optimizer = optim.Adam(self.policy.parameters(), lr=self.initial_lr)
         self.trajectory = Trajectory([], [], [], [], [], [])
         self.trajectory_count = 0
         self.action_names = ["no_feedback", "subtle_alert", "strong_alert"]
@@ -117,6 +124,12 @@ class PPOPPOAgent:
         return advantages, returns
 
     def update(self, next_value: float = 0.0) -> dict:
+        # LR scheduling: decay every lr_decay_interval updates
+        self.total_updates += 1
+        if self.total_updates > 0 and self.total_updates % self.lr_decay_interval == 0:
+            for param_group in self.optimizer.param_groups:
+                param_group['lr'] = max(param_group['lr'] * self.lr_decay, 1e-5)
+        
         if len(self.trajectory) < self.batch_size:
             self._clear_trajectory()
             return {"loss": 0.0, "policy_loss": 0.0, "value_loss": 0.0, "entropy": 0.0}
@@ -194,7 +207,7 @@ class PPOPPOAgent:
 
 
 if __name__ == "__main__":
-    agent = PPOPPOAgent(state_size=6, action_size=3)
+    agent = PPOPPOAgent(state_size=18, action_size=3)
     state = np.random.rand(6).astype(np.float32)
     action = agent.get_action(state, training=True)
     print(f"Action: {action} ({agent.get_action_name(action)})")

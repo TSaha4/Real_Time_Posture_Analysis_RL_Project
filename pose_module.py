@@ -212,6 +212,13 @@ class PoseAnalyzer:
     def __init__(self):
         self.detector = PoseDetector()
         self.calibrator = PoseCalibrator(config.system.calibration_frames)
+        # NEW: Temporal smoothing with EMA
+        self.feature_ema = {}
+        self.alpha = 0.3  # smoothing factor
+
+    def reset_ema(self):
+        """Reset EMA state - call before calibration or batch processing"""
+        self.feature_ema = {}
 
     def compute_angle(self, p1: Tuple[float, float], p2: Tuple[float, float]) -> float:
         dx = p2[0] - p1[0]
@@ -223,7 +230,9 @@ class PoseAnalyzer:
         neck_x = (shoulders["left_shoulder"]["x"] + shoulders["right_shoulder"]["x"]) / 2
         dy = nose["y"] - neck_y
         dx = nose["x"] - neck_x
-        return np.degrees(np.arctan2(-dy, np.sqrt(dx**2 + dy**2)))
+        # FIX: Use 3D distance including depth (z)
+        dz = nose.get("z", 0) - (shoulders["left_shoulder"].get("z", 0) + shoulders["right_shoulder"].get("z", 0)) / 2
+        return np.degrees(np.arctan2(-dy, np.sqrt(dx**2 + dz**2)))
 
     def compute_shoulder_alignment(self, shoulders: Dict) -> float:
         y_diff = abs(shoulders["left_shoulder"]["y"] - shoulders["right_shoulder"]["y"])
@@ -231,7 +240,38 @@ class PoseAnalyzer:
         return np.sqrt(y_diff**2 + x_diff**2)
 
     def compute_shoulder_diff(self, shoulders: Dict) -> float:
-        return abs(shoulders["left_shoulder"]["y"] - shoulders["right_shoulder"]["y"])
+        # FIX: Use both Y and Z for 3D shoulder diff
+        y_diff = shoulders["left_shoulder"]["y"] - shoulders["right_shoulder"]["y"]
+        z_diff = (shoulders["left_shoulder"].get("norm_z", 0) - shoulders["right_shoulder"].get("norm_z", 0)) * 100
+        return np.sqrt(y_diff**2 + z_diff**2)
+
+    def compute_head_tilt(self, keypoints: Dict) -> float:
+        """NEW: Compute head tilt using ear positions"""
+        if "left_ear" in keypoints and "right_ear" in keypoints:
+            left_ear = keypoints["left_ear"]
+            right_ear = keypoints["right_ear"]
+            # Use Y difference for tilt, normalized by ear distance
+            y_diff = abs(left_ear["y"] - right_ear["y"])
+            # Also check X positions to detect lateral tilt
+            x_diff = abs(left_ear["x"] - right_ear["x"])
+            # Combine for overall tilt measure
+            ear_distance = np.sqrt((left_ear["x"] - right_ear["x"])**2 + (left_ear["y"] - right_ear["y"])**2)
+            if ear_distance > 0:
+                tilt = np.sqrt(y_diff**2 + (x_diff * 0.5)**2) / ear_distance * 100
+                return tilt
+        return 0.0
+
+    def compute_elbow_asymmetry(self, keypoints: Dict) -> float:
+        """NEW: Compute arm tenseness using elbow positions"""
+        if "left_elbow" in keypoints and "right_elbow" in keypoints:
+            left = keypoints["left_elbow"]
+            right = keypoints["right_elbow"]
+            y_diff = abs(left["y"] - right["y"])
+            # Also check if elbows are dropped (tension indicator)
+            left_tension = left["y"]  # Higher Y = lower on screen = more dropped
+            right_tension = right["y"]
+            return y_diff + abs(left_tension - right_tension)
+        return 0.0
 
     def compute_spine_inclination(self, shoulders: Dict, hips: Dict) -> float:
         shoulder_mid_x = (shoulders["left_shoulder"]["x"] + shoulders["right_shoulder"]["x"]) / 2
@@ -246,28 +286,43 @@ class PoseAnalyzer:
         key_landmarks = self.detector.get_key_landmarks(keypoints)
         if not key_landmarks:
             return None
-        
+
         shoulders = {k: key_landmarks[k] for k in ["left_shoulder", "right_shoulder"]}
         hips = {k: key_landmarks[k] for k in ["left_hip", "right_hip"]}
         nose = key_landmarks["nose"]
-        
+
         shoulder_mid_y = (shoulders["left_shoulder"]["y"] + shoulders["right_shoulder"]["y"]) / 2
         torso_height = abs(shoulder_mid_y - hips["left_hip"]["y"])
-        
+
         forward_head = nose["y"] - shoulder_mid_y
-        
+
         if torso_height > 0:
             forward_head_normalized = (forward_head / torso_height) * 100
         else:
             forward_head_normalized = forward_head
-        
-        return {
+
+        features = {
             "neck_angle": self.compute_neck_angle(nose, shoulders),
             "shoulder_diff": self.compute_shoulder_diff(shoulders),
             "shoulder_alignment": self.compute_shoulder_alignment(shoulders),
             "spine_inclination": self.compute_spine_inclination(shoulders, hips),
             "forward_head_y": forward_head_normalized,
         }
+
+        # NEW: Add head tilt from ear positions
+        features["head_tilt"] = self.compute_head_tilt(keypoints)
+
+        # NEW: Add elbow asymmetry
+        features["elbow_asymmetry"] = self.compute_elbow_asymmetry(keypoints)
+
+        # NEW: Apply EMA smoothing
+        for key, value in features.items():
+            if key in self.feature_ema:
+                self.feature_ema[key] = self.alpha * value + (1 - self.alpha) * self.feature_ema[key]
+            else:
+                self.feature_ema[key] = value
+
+        return self.feature_ema.copy()
 
 
 if __name__ == "__main__":
