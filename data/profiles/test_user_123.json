@@ -1,0 +1,40 @@
+{
+  "user_id": "test_user_123",
+  "display_name": "Test User",
+  "created_at": "2026-04-09T11:00:51.971207",
+  "last_session": "2026-04-09T11:00:51.972209",
+  "baseline": {
+    "neck_angle": 45.0,
+    "shoulder_diff": 5.0,
+    "spine_inclination": 25.0,
+    "forward_head_y": 20.0,
+    "shoulder_alignment": 0.0,
+    "calibration_time": "2026-04-09T11:00:51.972209",
+    "num_samples": 30
+  },
+  "preferences": {},
+  "statistics": {
+    "total_sessions": 1,
+    "total_corrections": 10,
+    "total_alerts": 10,
+    "total_time": 300.0,
+    "good_posture_time": 300.0,
+    "avg_posture_score": 100.0,
+    "perfect_sessions": 1
+  },
+  "achievements": [
+    "perfect_session",
+    "first_session"
+  ],
+  "streak_data": {
+    "current_streak": 1,
+    "longest_streak": 1,
+    "last_session_date": "2026-04-09T11:00:51.972209",
+    "sessions_today": 1
+  },
+  "sensitivity_settings": {
+    "threshold_multiplier": 1.0,
+    "alert_interval_modifier": 1.0,
+    "fatigue_sensitivity": 0.5
+  }
+}

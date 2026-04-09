@@ -14,15 +14,20 @@ class PoseConfig:
 
 @dataclass
 class PostureConfig:
-    neck_angle_threshold: float = 20.0
-    shoulder_diff_threshold: float = 20.0
-    spine_inclination_threshold: float = 15.0
-    forward_head_threshold: float = 25.0
+    # Thresholds for 0-100 scale features (tuned for actual compute_posture_features output)
+    # Good posture: neck_angle ~40-50, forward_head_y ~15-25, spine ~15-35, shoulder_diff < 10
+    neck_angle_threshold: float = 15.0  # Deviation threshold from baseline
+    shoulder_diff_threshold: float = 12.0  # Max allowed shoulder diff
+    spine_inclination_threshold: float = 18.0  # Deviation threshold from baseline
+    forward_head_threshold: float = 15.0  # Max forward head deviation
+    
+    # Score weights - should add to 1.0
     score_weights: dict = field(default_factory=lambda: {
-        "neck_angle": 0.3,
-        "shoulder_align": 0.25,
-        "spine_inclination": 0.25,
-        "symmetry": 0.2
+        "neck_angle": 0.30,      # Primary indicator
+        "forward_head": 0.30,   # Very important
+        "shoulder_align": 0.20,  # Secondary
+        "spine_inclination": 0.15,
+        "symmetry": 0.05
     })
 
 

@@ -145,10 +145,15 @@ class PostureClassifier:
 
     def _determine_label(self, features: Dict, scores: Dict) -> PostureLabel:
         forward_threshold = config.posture.forward_head_threshold
-        if features.get("forward_head_y", 0) > forward_threshold:
-            return PostureLabel.FORWARD_HEAD
+        forward_val = features.get("forward_head_y", 0)
+        spine_val = abs(features.get("spine_inclination", 0))
+        
         if scores["spine_inclination"] < 0.5 and abs(features.get("spine_inclination", 0)) > config.posture.spine_inclination_threshold * 1.2:
             return PostureLabel.LEANING
+        if forward_val > forward_threshold:
+            if spine_val > config.posture.spine_inclination_threshold * 0.8:
+                return PostureLabel.SLOUCHING
+            return PostureLabel.FORWARD_HEAD
         if scores["neck_angle"] < 0.5 and scores["spine_inclination"] < 0.5:
             return PostureLabel.SLOUCHING
         avg_score = np.mean(list(scores.values()))
@@ -204,9 +209,20 @@ class AdaptiveThresholdClassifier(PostureClassifier):
 class RuleBasedClassifier:
     def __init__(self):
         self.baseline = None
+        self._hysteresis_count = 0
+        self._hysteresis_label = None
+        self._hysteresis_required = 3
 
     def set_baseline(self, baseline: Dict):
         self.baseline = baseline
+        self._reset_hysteresis()
+
+    def reset_hysteresis(self):
+        self._reset_hysteresis()
+
+    def _reset_hysteresis(self):
+        self._hysteresis_count = 0
+        self._hysteresis_label = None
 
     def get_suggestion(self, label: PostureLabel, features: Dict) -> str:
         import random
@@ -254,58 +270,88 @@ class RuleBasedClassifier:
         if not features:
             return PostureLabel.UNKNOWN, 0.0
 
-        # Use baseline-adjusted scoring if available
-        baseline = self.baseline
-        neck = features.get("neck_angle", 90)
-        shoulder_diff = features.get("shoulder_diff", 0)
-        shoulder_align = features.get("shoulder_alignment", 0)
-        spine = features.get("spine_inclination", 0)
-        forward = features.get("forward_head_y", 0)
+        # Get feature values from pose_analyzer.compute_posture_features()
+        neck = features.get("neck_angle", 50)        # 0-100, 40-50 = good, >50 = forward head
+        shoulder_diff = features.get("shoulder_diff", 0)   # 0-100, <10 = good
+        spine = features.get("spine_inclination", 50) # 0-100, 15-35 = good, >40 = slouched
+        forward = features.get("forward_head_y", 0)     # 0-100, 15-25 = good, >30 = forward
 
-        if baseline:
-            # Adjust thresholds based on user's calibrated good posture
-            neck_baseline = baseline.get("neck_angle", 90)
-            shoulder_baseline = baseline.get("shoulder_diff", 5)
-            spine_baseline = baseline.get("spine_inclination", 0)
-            forward_baseline = baseline.get("forward_head_y", 15)
-
-            # Compute deviation from user's baseline (calibrated good posture)
+        # Simple, clear thresholds based on actual compute_posture_features output ranges
+        # Good posture: neck ~40-50, forward ~15-25, spine ~15-35, shoulder_diff < 10
+        
+        # Calculate deviation from baseline if available, else use absolute thresholds
+        if self.baseline:
+            neck_baseline = self.baseline.get("neck_angle", 45)
+            forward_baseline = self.baseline.get("forward_head_y", 20)
+            spine_baseline = self.baseline.get("spine_inclination", 25)
+            shoulder_baseline = self.baseline.get("shoulder_diff", 5)
+            
             neck_dev = abs(neck - neck_baseline)
+            forward_dev = forward - forward_baseline
+            spine_dev = spine - spine_baseline
             shoulder_dev = abs(shoulder_diff - shoulder_baseline)
-            spine_dev = abs(spine - spine_baseline)
-            forward_dev = forward - forward_baseline if forward > forward_baseline else 0
         else:
-            neck_dev = abs(neck - 90)
+            # No baseline - use simple absolute thresholds
+            neck_dev = abs(neck - 45)
+            forward_dev = max(0, forward - 20)
+            spine_dev = max(0, spine - 30)
             shoulder_dev = shoulder_diff
-            spine_dev = abs(spine)
-            forward_dev = forward
 
-        neck_score = max(0, 1 - neck_dev / config.posture.neck_angle_threshold)
-        shoulder_score = max(0, 1 - shoulder_dev / config.posture.shoulder_diff_threshold)
-        spine_score = max(0, 1 - spine_dev / config.posture.spine_inclination_threshold)
-        forward_score = max(0, 1 - forward_dev / config.posture.forward_head_threshold)
+        # Clear decision rules (order matters!)
+        # 1. First check for leaning (shoulder asymmetry)
+        is_leaning = shoulder_dev > config.posture.shoulder_diff_threshold
+        
+        # 2. Check for forward head (most common)
+        is_forward_head = forward_dev > config.posture.forward_head_threshold
+        
+        # 3. Check for slouching (spine + neck combined)
+        is_slouching = spine_dev > config.posture.spine_inclination_threshold
 
-        # Include head_tilt in scoring if available
-        head_tilt = features.get("head_tilt", 0)
-        if head_tilt > 0:
-            tilt_score = max(0, 1 - head_tilt / 15.0)
-            # Blend tilt into overall score
-            neck_score = 0.8 * neck_score + 0.2 * tilt_score
+        # Simple weighted score based on deviations - LOWER is better
+        neck_score = max(0, 1 - (neck_dev / config.posture.neck_angle_threshold))
+        forward_score = max(0, 1 - (forward_dev / config.posture.forward_head_threshold))
+        shoulder_score = max(0, 1 - (shoulder_dev / config.posture.shoulder_diff_threshold))
+        spine_score = max(0, 1 - (spine_dev / config.posture.spine_inclination_threshold))
 
-        avg_score = (neck_score + shoulder_score + spine_score + forward_score) / 4
+        weights = config.posture.score_weights
+        avg_score = (
+            weights.get("neck_angle", 0.25) * neck_score +
+            weights.get("forward_head", 0.30) * forward_score +
+            weights.get("shoulder_align", 0.20) * shoulder_score +
+            weights.get("spine_inclination", 0.25) * spine_score
+        )
+        
+        # Cap score at valid range
+        avg_score = max(0.0, min(1.0, avg_score))
 
-        if avg_score >= 0.65:
-            label = PostureLabel.GOOD
-        elif forward_dev > config.posture.forward_head_threshold * 0.9:
-            label = PostureLabel.FORWARD_HEAD
-        elif abs(spine_dev) > config.posture.spine_inclination_threshold * 1.0:
+        # Priority: LEANING > SLOUCHING > FORWARD_HEAD > GOOD
+        if is_leaning:
             label = PostureLabel.LEANING
-        elif neck_score < 0.6 or shoulder_score < 0.6:
+        elif is_slouching:
             label = PostureLabel.SLOUCHING
-        else:
+        elif is_forward_head:
+            label = PostureLabel.FORWARD_HEAD
+        elif avg_score >= 0.70:
             label = PostureLabel.GOOD
+        elif avg_score >= 0.50:
+            label = PostureLabel.GOOD
+        else:
+            label = PostureLabel.SLOUCHING
 
-        return label, avg_score
+        if self._hysteresis_label is None or label.value == self._hysteresis_label.value:
+            self._hysteresis_count += 1
+        else:
+            self._hysteresis_count = 1
+        self._hysteresis_label = label
+
+        if self._hysteresis_count >= self._hysteresis_required:
+            stable_label = label
+        elif self._hysteresis_count > 1:
+            stable_label = self._hysteresis_label
+        else:
+            stable_label = PostureLabel.UNKNOWN
+
+        return stable_label, avg_score
 
 
 def encode_label(label: PostureLabel) -> int:

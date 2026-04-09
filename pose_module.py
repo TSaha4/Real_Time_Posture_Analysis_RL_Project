@@ -5,6 +5,8 @@ from mediapipe import solutions
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 from typing import Optional, Dict, Tuple, List
+import os
+import urllib.request
 from config import config
 
 
@@ -13,6 +15,57 @@ MODEL_FILES = {
     "full": "pose_landmarker.task",
     "heavy": "pose_landmarker_heavy.task",
 }
+
+MODEL_URLS = {
+    "lite": "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+    "full": "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker/float16/1/pose_landmarker.task",
+    "heavy": "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task",
+}
+
+
+def download_mediapipe_model(model_type: str = "lite", force: bool = False) -> bool:
+    """Download MediaPipe pose model if not present"""
+    if model_type not in MODEL_FILES:
+        print(f"Unknown model type: {model_type}")
+        return False
+    
+    model_file = MODEL_FILES[model_type]
+    
+    if os.path.exists(model_file) and not force:
+        print(f"Model already exists: {model_file}")
+        return True
+    
+    if model_type not in MODEL_URLS:
+        print(f"No URL available for model: {model_type}")
+        return False
+    
+    url = MODEL_URLS[model_type]
+    print(f"Downloading {model_type} model from {url}...")
+    
+    try:
+        urllib.request.urlretrieve(url, model_file)
+        print(f"Downloaded {model_file} successfully")
+        return True
+    except Exception as e:
+        print(f"Failed to download model: {e}")
+        return False
+
+
+def download_all_models() -> Dict[str, bool]:
+    """Download all available MediaPipe models"""
+    results = {}
+    for model_type in MODEL_FILES.keys():
+        results[model_type] = download_mediapipe_model(model_type)
+    return results
+
+
+def get_available_model() -> str:
+    """Returns the first available model file, preferring lite."""
+    for model_type in ["lite", "full", "heavy"]:
+        model_file = MODEL_FILES[model_type]
+        if os.path.exists(model_file):
+            return model_type
+    return "lite"  # Default fallback (will fail gracefully if missing)
 
 
 class PoseDetector:
@@ -31,7 +84,13 @@ class PoseDetector:
     KEY_LANDMARKS = ["nose", "left_shoulder", "right_shoulder", "left_hip", "right_hip"]
 
     def __init__(self, model_size: str = "lite", enable_holistic: bool = False):
-        model_file = MODEL_FILES.get(model_size, MODEL_FILES["lite"])
+        # Use available model instead of potentially missing ones
+        if model_size not in MODEL_FILES or not os.path.exists(MODEL_FILES[model_size]):
+            model_size = get_available_model()
+        model_file = MODEL_FILES[model_size]
+        
+        if not os.path.exists(model_file):
+            raise FileNotFoundError(f"MediaPipe model not found: {model_file}. Please download from MediaPipe repository.")
         
         options = vision.PoseLandmarkerOptions(
             base_options=python.BaseOptions(model_asset_path=model_file),
@@ -226,39 +285,67 @@ class PoseAnalyzer:
         return np.degrees(np.arctan2(dy, dx))
 
     def compute_neck_angle(self, nose: Dict, shoulders: Dict) -> float:
-        neck_y = (shoulders["left_shoulder"]["y"] + shoulders["right_shoulder"]["y"]) / 2
-        neck_x = (shoulders["left_shoulder"]["x"] + shoulders["right_shoulder"]["x"]) / 2
-        dy = nose["y"] - neck_y
-        dx = nose["x"] - neck_x
-        # FIX: Use 3D distance including depth (z)
-        dz = nose.get("z", 0) - (shoulders["left_shoulder"].get("z", 0) + shoulders["right_shoulder"].get("z", 0)) / 2
-        return np.degrees(np.arctan2(-dy, np.sqrt(dx**2 + dz**2)))
+        """
+        Calculate neck/head forward position as 0-100 score.
+        45 = ideal (nose vertically above shoulders)
+        Higher = nose forward of shoulders (forward head)
+        Lower = nose behind shoulders (pulled back)
+        
+        For normalized coords (Y increases downward):
+        - nose_y < shoulder_y means nose is ABOVE shoulders (good)
+        - nose_y = shoulder_y means nose at shoulder level
+        - nose_y > shoulder_y means nose below shoulders (bad)
+        """
+        shoulder_mid_y = (shoulders["left_shoulder"]["y"] + shoulders["right_shoulder"]["y"]) / 2
+        nose_y = nose["y"]
+        
+        # Offset: negative = good (nose above), positive = bad (nose forward/below)
+        offset = nose_y - shoulder_mid_y
+        
+        # Convert to 0-100 scale where ~45 is ideal
+        # Typical offset range: -0.2 (good) to +0.2 (bad)
+        # Scale: offset=-0.2 -> 20, offset=0 -> 45, offset=+0.2 -> 70
+        score = 45 + (offset * 125)
+        
+        return max(10, min(90, score))
 
     def compute_shoulder_alignment(self, shoulders: Dict) -> float:
+        """
+        Calculate shoulder asymmetry as 0-100 score.
+        5 = perfectly aligned (ideal)
+        Higher = more asymmetric (one shoulder higher than other)
+        """
         y_diff = abs(shoulders["left_shoulder"]["y"] - shoulders["right_shoulder"]["y"])
         x_diff = abs(shoulders["left_shoulder"]["x"] - shoulders["right_shoulder"]["x"])
-        return np.sqrt(y_diff**2 + x_diff**2)
-
+        
+        # Combined difference, scale to reasonable range
+        # Typical diff: 0.01-0.1 normalized (0-1 range)
+        # Scale to 0-100: multiply by 500 for very small diffs
+        asymmetry = np.sqrt(y_diff**2 + x_diff**2)
+        return min(100, asymmetry * 500)
+    
     def compute_shoulder_diff(self, shoulders: Dict) -> float:
-        # FIX: Use both Y and Z for 3D shoulder diff
-        y_diff = shoulders["left_shoulder"]["y"] - shoulders["right_shoulder"]["y"]
-        z_diff = (shoulders["left_shoulder"].get("norm_z", 0) - shoulders["right_shoulder"].get("norm_z", 0)) * 100
-        return np.sqrt(y_diff**2 + z_diff**2)
+        """
+        Calculate shoulder height difference as 0-100 score.
+        5 = perfectly level (ideal)
+        Higher = one shoulder significantly higher
+        """
+        y_diff = abs(shoulders["left_shoulder"]["y"] - shoulders["right_shoulder"]["y"])
+         
+        # Typical range: 0.0-0.1 normalized difference
+        # Scale to 0-100: multiply by 500
+        # 0.01 diff = 5 (good), 0.1 diff = 50 (bad)
+        return min(100, y_diff * 500)
 
     def compute_head_tilt(self, keypoints: Dict) -> float:
-        """NEW: Compute head tilt using ear positions"""
+        """Compute head tilt using ear positions (0-10 = good, >20 = tilted)"""
         if "left_ear" in keypoints and "right_ear" in keypoints:
             left_ear = keypoints["left_ear"]
             right_ear = keypoints["right_ear"]
-            # Use Y difference for tilt, normalized by ear distance
+            # Use Y difference for tilt
             y_diff = abs(left_ear["y"] - right_ear["y"])
-            # Also check X positions to detect lateral tilt
-            x_diff = abs(left_ear["x"] - right_ear["x"])
-            # Combine for overall tilt measure
-            ear_distance = np.sqrt((left_ear["x"] - right_ear["x"])**2 + (left_ear["y"] - right_ear["y"])**2)
-            if ear_distance > 0:
-                tilt = np.sqrt(y_diff**2 + (x_diff * 0.5)**2) / ear_distance * 100
-                return tilt
+            # Scale to reasonable range
+            return min(50, y_diff * 250)
         return 0.0
 
     def compute_elbow_asymmetry(self, keypoints: Dict) -> float:
@@ -274,13 +361,29 @@ class PoseAnalyzer:
         return 0.0
 
     def compute_spine_inclination(self, shoulders: Dict, hips: Dict) -> float:
-        shoulder_mid_x = (shoulders["left_shoulder"]["x"] + shoulders["right_shoulder"]["x"]) / 2
+        """
+        Calculate spine forward lean as 0-100 score.
+        In webcam view (Y increases downward):
+        - shoulders at y=0.5, hips at y=0.85
+        - shoulders are ABOVE hips (good) -> offset is negative
+        - shoulders at same level as hips (bad) -> offset is near 0
+        """
         shoulder_mid_y = (shoulders["left_shoulder"]["y"] + shoulders["right_shoulder"]["y"]) / 2
-        hip_mid_x = (hips["left_hip"]["x"] + hips["right_hip"]["x"]) / 2
         hip_mid_y = (hips["left_hip"]["y"] + hips["right_hip"]["y"]) / 2
-        dy = shoulder_mid_y - hip_mid_y
-        dx = shoulder_mid_x - hip_mid_x
-        return np.degrees(np.arctan2(-dy, dx))
+        
+        # offset: typically around -0.35 (shoulders well above hips)
+        # More negative = more upright (good)
+        # Closer to 0 = more slouched (bad)
+        offset = shoulder_mid_y - hip_mid_y  # typically -0.4 to -0.2
+        
+        # Convert to 0-100 where LOWER = better (more upright)
+        # offset in range -0.4 to -0.15 (shoulder above hip)
+        # Map: -0.4 (very upright) -> 15, -0.2 (neutral) -> 30, -0.1 (slouched) -> 50
+        score = 50 + (offset * 150)
+        # Clamp: 10-80 range for practical use
+        score = max(10, min(80, score))
+        
+        return max(0, min(100, score))
 
     def compute_posture_features(self, keypoints: Dict) -> Dict:
         key_landmarks = self.detector.get_key_landmarks(keypoints)
@@ -294,29 +397,27 @@ class PoseAnalyzer:
         shoulder_mid_y = (shoulders["left_shoulder"]["y"] + shoulders["right_shoulder"]["y"]) / 2
         torso_height = abs(shoulder_mid_y - hips["left_hip"]["y"])
 
-        forward_head = nose["y"] - shoulder_mid_y
-
+        # Forward head: nose above shoulders (good) vs at/below shoulders (bad)
+        nose_to_shoulder = shoulder_mid_y - nose["y"]  # positive = nose above
         if torso_height > 0:
-            forward_head_normalized = (forward_head / torso_height) * 100
+            forward_head_ratio = nose_to_shoulder / torso_height
         else:
-            forward_head_normalized = forward_head
+            forward_head_ratio = 0
+        forward_head_normalized = max(0, 20 - forward_head_ratio * 200)
 
-        features = {
+        # Compute raw features
+        raw_features = {
             "neck_angle": self.compute_neck_angle(nose, shoulders),
             "shoulder_diff": self.compute_shoulder_diff(shoulders),
-            "shoulder_alignment": self.compute_shoulder_alignment(shoulders),
+            "shoulder_alignment": self.compute_shoulder_alignment(shoulders) * 100,
             "spine_inclination": self.compute_spine_inclination(shoulders, hips),
             "forward_head_y": forward_head_normalized,
+            "head_tilt": self.compute_head_tilt(keypoints),
+            "elbow_asymmetry": self.compute_elbow_asymmetry(keypoints),
         }
 
-        # NEW: Add head tilt from ear positions
-        features["head_tilt"] = self.compute_head_tilt(keypoints)
-
-        # NEW: Add elbow asymmetry
-        features["elbow_asymmetry"] = self.compute_elbow_asymmetry(keypoints)
-
-        # NEW: Apply EMA smoothing
-        for key, value in features.items():
+        # Apply EMA smoothing for temporal stability
+        for key, value in raw_features.items():
             if key in self.feature_ema:
                 self.feature_ema[key] = self.alpha * value + (1 - self.alpha) * self.feature_ema[key]
             else:

@@ -63,6 +63,16 @@ class PostureSystem:
         self.last_suggestion_time = 0
         self.last_score_before_suggestion = 0.8
 
+        # NEW: RL action tracking
+        self.last_action_time = 0
+        self.last_alert_time = 0
+        self.last_alert_action = 0
+        self.last_score_before_alert = 0.0
+        self.first_decision = True
+
+        # Current features for RL state
+        self.current_features = {}
+
         # NEW: Continuous recalibration tracking
         self.good_posture_streak = 0
         self.recalibration_samples = []
@@ -277,13 +287,13 @@ class PostureSystem:
     
     def _get_default_baseline(self) -> dict:
         return {
-            "neck_angle": 90.0,
-            "shoulder_diff": 8.0,  # Increased from 5 - more realistic for webcam
-            "shoulder_alignment": 15.0,  # Increased from 10 - more lenient
-            "spine_inclination": 5.0,  # Increased from 0 - accounts for camera angle
-            "forward_head_y": 20.0,  # Increased from 15 - more realistic
-            "head_tilt": 3.0,  # NEW - more lenient
-            "elbow_asymmetry": 5.0,  # NEW - more lenient
+            "neck_angle": 45,       # Good posture: 40-50 (nose slightly above shoulders)
+            "shoulder_diff": 5,      # Good: level shoulders (<10)
+            "spine_inclination": 20,   # Good: shoulders well above hips (20-30)
+            "forward_head_y": 20,   # Good: nose above shoulders (15-25)
+            "head_tilt": 3,         # Good: level head (<5)
+            "elbow_asymmetry": 5,     # Good: relaxed arms
+            "shoulder_alignment": 10, # Good: aligned shoulders
         }
     
     def use_default_calibration(self):
@@ -320,6 +330,10 @@ class PostureSystem:
             if keypoints:
                 last_keypoints = keypoints
                 features = self.pose_analyzer.compute_posture_features(keypoints)
+                # Store features for RL state
+                if features:
+                    self.current_features = features.copy()
+                
                 if features and self.baseline:
                     features = self._adjust_features_relative_to_baseline(features)
                     new_label, new_score = self.classifier.classify(features)
@@ -347,12 +361,15 @@ class PostureSystem:
             if self.unified_analyzer:
                 combined_metrics = self.unified_analyzer.analyze(frame, self.current_score, self.current_label.value)
                 self.current_score = combined_metrics.combined_score
+                attention_score = combined_metrics.attention_score
+            else:
+                attention_score = 1.0
             
             if self.dashboard_exporter:
                 self.dashboard_exporter.record_frame(
                     self.current_score, 
                     self.current_label.value,
-                    combined_metrics.attention_score if self.unified_analyzer else 1.0
+                    attention_score
                 )
             
             action = 0
@@ -383,11 +400,20 @@ class PostureSystem:
                             self.algorithm = new_algo
                             print(f"[Auto-Switch] Switched to {new_algo.upper()}")
                 
+# Track action timing for RL state
+                self.last_action_time = self.current_time
+                
                 if self.rl_agent:
                     self.current_action_name = self.rl_agent.get_action_name(action)
                 else:
                     self.current_action_name = Action(action).name
-                
+
+                # Track alert for correction effectiveness
+                if action != 0:
+                    self.last_alert_time = self.current_time
+                    self.last_alert_action = action
+                    self.last_score_before_alert = self.current_score
+
                 if self.enable_audio and action != 0:
                     self._play_audio_alert(action)
             
@@ -404,18 +430,104 @@ class PostureSystem:
         self._cleanup()
     
     def _online_learning_update(self, action: int):
-        if not self.current_state:
+        """Online learning: collect experiences and periodically train the agent"""
+        if not self.current_state or not self.rl_agent:
             return
+        
         self.online_learning_counter += 1
+        
+        # Collect experience: state, action, reward
+        # We'll compute reward based on posture improvement
+        reward = self._compute_online_reward(action)
+        
         exp = {
             "state": self.current_state.to_array(),
             "action": action,
+            "reward": reward,
             "posture_label": self.current_label.value,
             "score": self.current_score,
         }
+        
         self.online_learning_buffer.append(exp)
-        if len(self.online_learning_buffer) >= config.online_learning.batch_size:
-            self.online_learning_buffer = self.online_learning_buffer[-config.online_learning.batch_size:]
+        
+        # Keep buffer at max size
+        max_buffer = config.online_learning.batch_size * 4
+        if len(self.online_learning_buffer) > max_buffer:
+            self.online_learning_buffer = self.online_learning_buffer[-max_buffer:]
+        
+        # Train periodically when buffer has enough samples
+        train_interval = config.online_learning.update_frequency
+        if self.online_learning_counter > 0 and self.online_learning_counter % train_interval == 0:
+            self._perform_online_training()
+    
+    def _compute_online_reward(self, action: int) -> float:
+        """Compute reward for online learning based on posture and action"""
+        if self.current_label == PostureLabel.GOOD:
+            if action == 0:  # No feedback - good posture maintained
+                return 0.3
+            else:  # Alert when already good - unnecessary
+                return -0.1
+        else:  # Bad posture
+            if action == 0:  # No feedback - ignoring bad posture
+                return -0.2
+            else:  # Alert issued
+                return 0.1  # Small positive for trying to correct
+    
+    def _perform_online_training(self):
+        """Perform online training using collected experiences"""
+        if not self.rl_agent or len(self.online_learning_buffer) < config.online_learning.min_experiences:
+            return
+        
+        # Use recent experiences for training
+        buffer_size = min(len(self.online_learning_buffer), config.online_learning.batch_size * 2)
+        recent_buffer = self.online_learning_buffer[-buffer_size:]
+        
+        # Sample random batch
+        import random
+        batch_size = min(config.online_learning.batch_size, len(recent_buffer))
+        batch = random.sample(recent_buffer, batch_size)
+        
+        total_loss = 0.0
+        num_updates = 0
+        
+        for exp in batch:
+            state = exp["state"]
+            action = exp["action"]
+            reward = exp["reward"]
+            
+            # For DQN: need next_state and done
+            # Use current state as proxy (simple approach)
+            next_state = state  # Simplified
+            done = False
+            
+            # Try to update based on agent type
+            agent_type = self._get_active_algorithm()
+            
+            if agent_type == "dqn":
+                # DQN uses update(state, action, reward, next_state, done)
+                loss = self.rl_agent.update(state, action, reward, next_state, done)
+                if loss is not None:
+                    total_loss += loss
+                    num_updates += 1
+            
+            elif agent_type == "ppo":
+                # PPO uses get_action (which records to trajectory) and then update()
+                # For online learning, we need to do a mini-update
+                # Get action to record in trajectory
+                self.rl_agent.get_action(state, training=True)
+                self.rl_agent.record_step(reward, done)
+        
+        # For PPO, we need to actually update the policy
+        if agent_type == "ppo" and len(self.rl_agent.trajectory) >= batch_size:
+            losses = self.rl_agent.update(next_value=0.0)
+            if losses and losses.get("loss", 0) > 0:
+                total_loss += losses["loss"]
+                num_updates += 1
+        
+        if num_updates > 0:
+            avg_loss = total_loss / num_updates
+            if self.online_learning_counter % 500 == 0:
+                print(f"Online learning: updated {num_updates} times, avg loss: {avg_loss:.4f}")
 
     def _get_active_algorithm(self) -> str:
         """Get the currently active algorithm - either from auto-switch or fixed setting"""
@@ -438,11 +550,89 @@ class PostureSystem:
             self.rl_agent.load(f"{config.system.model_dir}/dqn_final.pth")
 
     def _get_rl_action(self) -> int:
-        if self.current_state is None:
-            self.current_state = PostureState.from_posture(self.current_label, self.current_score)
-        self.current_state.posture_score = self.current_score
-        self.current_state.posture_label = encode_label(self.current_label)
-        return self.rl_agent.get_action(self.current_state.to_array())
+        # Build state in SAME format as training (simulation_enhanced.py line 308)
+        # This matches the 18-dim state that PPO/DQN was trained on
+        
+        # Track local state
+        if not hasattr(self, '_rl_consecutive_alerts'):
+            self._rl_consecutive_alerts = 0
+        if not hasattr(self, '_rl_alerts_this_episode'):
+            self._rl_alerts_this_episode = 0
+        if not hasattr(self, '_rl_corrections_this_episode'):
+            self._rl_corrections_this_episode = 0
+        if not hasattr(self, '_rl_correction_streak'):
+            self._rl_correction_streak = 0
+        if not hasattr(self, '_rl_max_streak'):
+            self._rl_max_streak = 0
+        if not hasattr(self, '_rl_user_fatigue'):
+            self._rl_user_fatigue = 0.0
+        if not hasattr(self, '_rl_motivation'):
+            self._rl_motivation = 0.7
+        if not hasattr(self, '_rl_frustration'):
+            self._rl_frustration = 0.0
+        
+        # Track consecutive alerts
+        if self.last_alert_action > 0:
+            self._rl_consecutive_alerts += 1
+            self._rl_alerts_this_episode += 1
+        else:
+            self._rl_consecutive_alerts = 0
+        
+        # Track corrections (when posture improves after alert)
+        if self.last_alert_time > 0:
+            if self.current_label == PostureLabel.GOOD or self.current_score > self.last_score_before_alert + 0.15:
+                self._rl_corrections_this_episode += 1
+                self._rl_correction_streak += 1
+                self._rl_max_streak = max(self._rl_max_streak, self._rl_correction_streak)
+            else:
+                self._rl_correction_streak = 0
+        
+        # Track user fatigue (increases with alerts)
+        self._rl_user_fatigue = min(1.0, self._rl_alerts_this_episode / 20.0)
+        
+        # Compute correction rate
+        correction_rate = 0.0
+        if self._rl_alerts_this_episode > 0:
+            correction_rate = self._rl_corrections_this_episode / self._rl_alerts_this_episode
+        
+        # Build state array (18 dims to match training)
+        is_good = 1.0 if self.current_label == PostureLabel.GOOD else 0.0
+        badness = 1.0 - self.current_score
+        
+        state = np.array([
+            # Basic features (6) - matching training format
+            float(encode_label(self.current_label)),
+            self.current_score,
+            self._rl_consecutive_alerts / 5.0,
+            self._rl_user_fatigue,
+            self._rl_motivation,
+            self._rl_frustration,
+            # Derived features (6)
+            is_good,
+            badness,
+            self._rl_alerts_this_episode / 20.0,
+            correction_rate,
+            self._rl_correction_streak / 10.0,
+            self._rl_max_streak / 20.0,
+            # User profile features (6)
+            0.7,  # compliance_rate - default
+            0.8,  # attention_span
+            0.3,  # stubbornness
+            0.0,  # session_time normalized
+            0.0,  # correction_ability
+            0.5,  # alert_sensitivity
+        ], dtype=np.float32)
+        
+        # Get action from RL agent
+        action = self.rl_agent.get_action(state)
+        
+        # Reset episode tracking if we just started fresh decision cycle
+        if self._rl_alerts_this_episode > 15:
+            self._rl_alerts_this_episode = 0
+            self._rl_corrections_this_episode = 0
+            self._rl_max_streak = 0
+        
+        return action
 
     def _get_rule_action(self) -> int:
         should_alert, action = self.rule_env.should_alert(
@@ -488,17 +678,18 @@ class PostureSystem:
         return baseline
 
     def _adjust_features_relative_to_baseline(self, features: dict) -> dict:
+        # Now properly computes relative features by comparing current features to baseline
+        # The RuleBasedClassifier also does comparison, but this is for logging/debugging
+        if not features or not self.baseline:
+            return features
+        
         adjusted = features.copy()
-        if self.baseline:
-            base_features = self.pose_analyzer.compute_posture_features(self.baseline)
-            if base_features:
-                adjusted["neck_angle"] = features.get("neck_angle", 90) - base_features.get("neck_angle", 90) + 90
-                adjusted["shoulder_diff"] = abs(features.get("shoulder_diff", 0) - base_features.get("shoulder_diff", 0))
-                adjusted["spine_inclination"] = features.get("spine_inclination", 0) - base_features.get("spine_inclination", 0)
-                adjusted["forward_head_y"] = features.get("forward_head_y", 0) - base_features.get("forward_head_y", 0)
-                # NEW: Handle head_tilt and elbow_asymmetry
-                adjusted["head_tilt"] = features.get("head_tilt", 0) - base_features.get("head_tilt", 0)
-                adjusted["elbow_asymmetry"] = abs(features.get("elbow_asymmetry", 0) - base_features.get("elbow_asymmetry", 0))
+        adjusted['_deviation'] = {
+            'neck': abs(features.get('neck_angle', 50) - self.baseline.get('neck_angle', 45)),
+            'forward': features.get('forward_head_y', 20) - self.baseline.get('forward_head_y', 20),
+            'spine': abs(features.get('spine_inclination', 30) - self.baseline.get('spine_inclination', 25)),
+            'shoulder': abs(features.get('shoulder_diff', 5) - self.baseline.get('shoulder_diff', 5)),
+        }
         return adjusted
 
     def _draw_overlay(self, frame: np.ndarray, action_name: str) -> np.ndarray:
@@ -758,7 +949,7 @@ def train_both(num_episodes: int = 500, num_users: int = 5, enhanced: bool = Fal
 def compare_agents(num_episodes: int = 100, num_users: int = 5):
     from simulation_enhanced import compare_algorithms
     print("=" * 60 + "\nComparing PPO vs DQN vs Rule-Based\n" + "=" * 60)
-    results = compare_algorithms(num_episodes=num_episodes, num_users=num_users,
+    results = compare_algorithms(num_episodes=num_episodes,
                                   ppo_path=f"{config.system.model_dir}/ppo_final.pth",
                                   dqn_path=f"{config.system.model_dir}/dqn_final.pth")
     print("\n" + "=" * 60 + "\nCOMPARISON RESULTS\n" + "=" * 60)

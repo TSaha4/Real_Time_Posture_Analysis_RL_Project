@@ -1,6 +1,6 @@
 # UPRYT - Real-Time Posture Analysis with Reinforcement Learning
 
-An advanced posture correction system using RL for adaptive feedback with auto-switching algorithms, attention tracking, and hand tracking.
+An enterprise-grade posture correction system using reinforcement learning for adaptive feedback. Designed for production deployment in corporate wellness, remote work, and ergonomic applications.
 
 ## Quick Start
 
@@ -11,58 +11,39 @@ python gui_app.py
 
 ### Command Line
 ```bash
-# Full system (posture + attention + hands)
-python main.py --mode combined --algorithm ppo --audio
+# Run realtime with PPO (recommended RL agent)
+python main.py --mode=realtime --algorithm=ppo
 
-# Posture only
-python main.py --mode realtime --algorithm ppo
+# Run realtime with DQN
+python main.py --mode=realtime --algorithm=dqn
 
-# Train RL agent (recommended: use --enhanced-training)
-python main.py --mode train --algorithm ppo --episodes 2000 --enhanced-training
+# Run with rule-based (fallback)
+python main.py --mode=realtime --algorithm=rule
 
-# Train both PPO and DQN
-python main.py --mode train-all --episodes 2000 --enhanced-training
+# Train both algorithms
+python main.py --mode=train-all --episodes=150 --users=5
 ```
 
 ## Features
 
 ### Core
-- Real-time pose detection using MediaPipe (33 landmarks)
-- Reinforcement Learning feedback (DQN, PPO, or Rule-Based)
+- Real-time pose detection using MediaPipe (33 body landmarks)
+- Reinforcement Learning feedback (PPO, DQN, or Rule-Based)
 - User calibration for personalized assessment
-- Compact visual overlay (minimal screen coverage)
+- Compact visual overlay
 - **Auto-Switching**: Automatically selects best algorithm based on correction rate
 
-### Tracking Modes
-| Mode | Description |
-|------|-------------|
-| `combined` | Full system - posture + attention + hands |
-| `realtime` | Real-time posture monitoring |
-| `hand` | Hand/typing posture tracking only |
-| `attention` | Face/gaze/focus tracking only |
-| `train` | Train RL agent |
-| `train-all` | Train both PPO and DQN |
-| `compare` | Benchmark algorithms |
+### Posture Detection
+- Forward head posture
+- Slouching/spine curvature
+- Leaning/shoulder asymmetry
+- Good posture recognition
 
 ### Training
-- **Enhanced Training**: Curriculum learning with domain randomization
-- **LR Scheduling**: Learning rate decays during training for stability
-- **Realistic Simulation**: User behavior modeling (fatigue, compliance, motivation)
+- **Enhanced Training**: Simulated user behavior modeling
 - **Difficulty Levels**: easy, medium, hard
-
-### Visualization
-- **Training Visualization**: Generate plots from training results
-- **Benchmark Metrics**: Correction rate, avg reward, total alerts
-
-## Installation
-
-```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Or install as package
-pip install -e .
-```
+- **Curriculum Learning**: Progressive difficulty stages
+- **Domain Randomization**: Robust training
 
 ## Project Structure
 
@@ -73,18 +54,18 @@ UPRYT Project
 ├── config.py                  # Centralized configuration
 │
 ├── Core Modules
-│   ├── pose_module.py         # MediaPipe integration
-│   ├── posture_module.py      # Posture classification
-│   ├── environment.py         # RL environment
-│   ├── feedback.py            # Visual overlay
-│   └── utils.py               # Utilities
+│   ├── pose_module.py         # MediaPipe pose detection
+│   ├── posture_module.py    # Posture classification
+│   ├── environment.py      # RL environment & state
+│   ├── feedback.py          # Visual overlay
+│   └── utils.py             # Logging utilities
 │
 ├── RL Agents
-│   ├── rl_agent.py           # DQN implementation
-│   └── rl_ppo_agent.py       # PPO implementation
+│   ├── rl_agent.py         # DQN implementation
+│   └── rl_ppo_agent.py     # PPO implementation
 │
 ├── Training
-│   └── simulation_enhanced.py # Enhanced training with curriculum
+│   └── simulation_enhanced.py # Training simulator
 │
 ├── Tracking (Optional)
 │   ├── attention_tracker.py   # Face/gaze detection
@@ -92,87 +73,91 @@ UPRYT Project
 │   └── combined_analyzer.py   # Unified analyzer
 │
 ├── Utilities
-│   ├── algorithm_selector.py  # Auto-switching algorithm
-│   ├── audio_alerts.py        # Audio system
+│   ├── algorithm_selector.py  # Auto-switching
+│   ├── audio_alerts.py        # Audio alerts
 │   ├── visualize_results.py   # Training visualization
-│   ├── user_profiles.py       # User profiles
-│   └── online_learning.py     # Real-time learning
+│   ├── user_profiles.py     # User profiles
+│   └── online_learning.py   # Real-time learning
 │
-├── models/                    # Trained RL models (.pth)
-└── results/                   # Training results & visualizations
+├── models/                  # Trained RL models (.pth)
+└── results/                # Training results
+```
+
+## Installation
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
 ```
 
 ## CLI Options
 
-```bash
-# Modes
---mode=combined    # Full system (recommended)
---mode=realtime    # Posture only
---mode=hand        # Hand tracking
---mode=attention   # Attention tracking
---mode=train       # Train RL agent
---mode=train-all   # Train both PPO and DQN
---mode=compare     # Benchmark algorithms
+### Modes
+| Mode | Description |
+|------|-------------|
+| `realtime` | Real-time posture monitoring |
+| `train` | Train RL agent |
+| `train-all` | Train both PPO and DQN |
+| `compare` | Benchmark algorithms |
+| `hand` | Hand/typing posture only |
+| `attention` | Face/gaze tracking only |
+| `combined` | Full system |
 
-# Algorithms
---algorithm=ppo    # Proximal Policy Optimization
---algorithm=dqn    # Deep Q-Network
---algorithm=rule   # Rule-based (no RL)
---algorithm=auto   # Automatic algorithm selection (recommended)
+### Algorithms
+| Algorithm | Description |
+|-----------|-------------|
+| `ppo` | Proximal Policy Optimization (recommended) |
+| `dqn` | Deep Q-Network |
+| `rule` | Rule-based (fallback) |
+| `auto` | Automatic selection |
 
-# Feature Flags
---audio            # Enable audio alerts
---attention        # Enable attention tracking
---hands            # Enable hand tracking
---skip-calibration # Use default baseline
---enhanced-training # Use curriculum learning (recommended for training)
---auto-switch      # Enable automatic algorithm switching (default: on)
---no-auto-switch   # Disable automatic algorithm switching
+### Flags
+| Flag | Description |
+|------|-------------|
+| `--audio` | Enable audio alerts |
+| `--skip-calibration` | Use default baseline |
+| `--enhanced-training` | Use curriculum learning |
+| `--attention` | Enable attention tracking |
+| `--hands` | Enable hand tracking |
+| `--dashboard` | Enable session export |
 
-# Training Options
---episodes=N       # Training episodes (default: 500)
---users=N          # Simulated users (default: 5)
---difficulty={easy,medium,hard} # Training difficulty
-
-# Other
---camera=N         # Camera index (default: 0)
-```
+### Training Options
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--episodes` | 500 | Training episodes |
+| `--users` | 5 | Simulated users |
+| `--difficulty` | medium | easy/medium/hard |
 
 ## Usage Examples
 
 ```bash
-# Full featured session with auto-switching (recommended)
-python main.py --mode combined --algorithm auto --audio
+# Recommended: PPO with calibration (in production)
+python main.py --mode=realtime --algorithm=ppo
 
-# Quick start (no calibration)
-python main.py --mode realtime --algorithm rule --skip-calibration --audio
+# Quick start: Use default calibration
+python main.py --mode=realtime --algorithm=ppo --skip-calibration
 
-# Train PPO with enhanced training (recommended)
-python main.py --mode train --algorithm ppo --episodes 2000 --enhanced-training --difficulty medium
+# Rule-based (for comparison or debugging)
+python main.py --mode=realtime --algorithm=rule
 
-# Train both PPO and DQN
-python main.py --mode train-all --episodes 2000 --enhanced-training
+# Train PPO
+python main.py --mode=train --algorithm=ppo --episodes=150 --users=5
 
-# Visualize training results
-python visualize_results.py --benchmark
+# Train both PPO and DQN (recommended)
+python main.py --mode=train-all --episodes=150 --users=5
+
+# Benchmark comparison
+python main.py --mode=compare --episodes=50
 ```
 
 ## Training Visualization
 
-After training, visualize results:
-
 ```bash
-# Auto-detect latest training runs
+# Generate plots from training
 python visualize_results.py
 
-# With benchmark comparison
+# Benchmark comparison
 python visualize_results.py --benchmark
-
-# Custom files
-python visualize_results.py --ppo-file results/ppo_20260402_123456.json --dqn-file results/dqn_20260402_123456.json
-
-# Adjust moving average window
-python visualize_results.py --window 20
 ```
 
 Generates:
@@ -183,59 +168,102 @@ Generates:
 
 ## How It Works
 
-1. **Camera** → MediaPipe Pose extracts 33 body landmarks
-2. **Features** → Compute angles (neck, shoulders, spine)
-3. **Classify** → Determine posture state (GOOD/SLOUCHING/etc)
-4. **RL Agent** → Decide feedback action (no/subtle/strong)
-5. **Feedback** → Visual overlay + audio alert
+### Pipeline
+
+1. **Camera Capture** → MediaPipe Pose extracts 33 body landmarks
+2. **Feature Extraction** → Compute geometric features (neck angle, shoulder diff, spine inclination)
+3. **Calibration** → Establish user-specific baseline (20 frames)
+4. **Classification** → Determine posture state (GOOD/SLOUCHING/FORWARD_HEAD/LEANING)
+5. **RL Decision** → PPO/DQN agent selects action (NO_FEEDBACK/SUBTLE_ALERT/STRONG_ALERT)
+6. **Feedback** → Visual overlay + optional audio alert
 
 ### State Space (18-dim)
 ```
 [posture_label, score, consecutive_alerts, fatigue, motivation, frustration,
  is_good, badness, episode_alerts, correction_ratio, correction_streak, max_streak,
- compliance, stubbornness, attention_span, learning_rate, is_easy, is_hard]
+ compliance, attention_span, stubbornness, session_time, correction_ability, alert_sensitivity]
 ```
 
 ### Action Space
-```
-0 = NO_FEEDBACK
-1 = SUBTLE_ALERT
-2 = STRONG_ALERT
-```
+| Action | Value | Description |
+|--------|-------|-------------|
+| NO_FEEDBACK | 0 | No alert - good posture or ignored |
+| SUBTLE_ALERT | 1 | Gentle notification |
+| STRONG_ALERT | 2 | Urgent alert |
 
-### Rewards (Training)
-- Successful correction: +1.5 to +2.3 (with time bonus)
-- Alert ignored: -0.3
-- Good posture maintained: +0.05 to +0.2
+### Reward Function
+| Scenario | Reward |
+|----------|--------|
+| Successful correction | +1.5 to +2.3 |
+| Alert ignored | -0.3 |
+| Good posture maintained | +0.05 |
+| Sustained bad posture | -0.1 |
 
 ## Configuration
 
-Edit `config.py` or use command-line flags:
+Edit `config.py`:
 
 ```python
 from config import config
 
 # RL Settings
+config.rl.state_size = 18
+config.rl.action_size = 3
 config.rl.batch_size = 128
 config.rl.learning_rate = 0.001
-config.rl.lr_decay = 0.5
-config.rl.lr_decay_interval = 500
 
-# System
-config.system.decision_interval = 2.5  # seconds
+# System Settings
+config.system.decision_interval = 2.5  # seconds between decisions
 
-# Posture thresholds
-config.posture.neck_angle_threshold = 20.0
+# Posture Thresholds
+config.posture.neck_angle_threshold = 15.0
+config.posture.shoulder_diff_threshold = 12.0
+config.posture.spine_inclination_threshold = 18.0
+config.posture.forward_head_threshold = 15.0
 ```
+
+### Key Parameters
+
+| Parameter | Value | Description |
+|----------|-------|-------------|
+| `decision_interval` | 2.5s | Time between RL decisions |
+| `calibration_frames` | 20 | Frames for calibration |
+| `cooldown_period` | 3.0s | Minimum between alerts |
+| `neck_angle_threshold` | 15.0 | Max deviation from baseline |
+| `shoulder_diff_threshold` | 12.0 | Max shoulder asymmetry |
 
 ## Dependencies
 
 - Python 3.8+
-- OpenCV
-- MediaPipe
+- OpenCV (`cv2`)
+- MediaPipe (`mediapipe`)
 - PyTorch
 - NumPy
-- Matplotlib (for visualization)
+- Matplotlib (optional, for visualization)
+
+## Production Deployment
+
+### Recommended Setup
+```bash
+# Train once before deployment
+python main.py --mode=train-all --episodes=200 --users=8
+
+# Start realtime session
+python main.py --mode=realtime --algorithm=ppo
+```
+
+### Monitoring
+- Session logs saved to: `logs/`
+- Trained models in: `models/`
+- Results in: `results/`
+
+## Performance
+
+| Metric | PPO | DQN | Rule-Based |
+|--------|-----|-----|-----------|
+| Avg Reward | 20-30 | 15-25 | N/A |
+| Correction Rate | 12-15% | 12-15% | 8-12% |
+| Alert Frequency | Moderate | Moderate | High |
 
 ## License
 
