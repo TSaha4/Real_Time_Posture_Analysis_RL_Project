@@ -43,6 +43,7 @@ class PostureSystem:
         self.rule_env = RuleBasedEnvironment()
         self.current_state = None
         self.last_decision_time = 0
+        self._bad_posture_duration = 0
         self.current_time = 0
         self.metrics_logger = MetricsLogger()
         self.session_logger = SessionLogger()
@@ -381,7 +382,7 @@ class PostureSystem:
                 
                 if active_algo == "rule":
                     action = self._get_rule_action()
-                elif self.is_calibrated:
+                elif self.is_calibrated and self.rl_agent:
                     action = self._get_rl_action()
                     if self.enable_online_learning and self.rl_agent:
                         self._online_learning_update(action)
@@ -635,8 +636,14 @@ class PostureSystem:
         return action
 
     def _get_rule_action(self) -> int:
+        # Track bad posture duration manually (since self.current_state doesn't exist in PostureSystem)
+        if self.current_label != PostureLabel.GOOD and self.current_label != PostureLabel.UNKNOWN:
+            self._bad_posture_duration += config.system.decision_interval
+        else:
+            self._bad_posture_duration = max(0, self._bad_posture_duration - 1)
+        
         should_alert, action = self.rule_env.should_alert(
-            self.current_label, self.current_state.duration_bad_posture if self.current_state else 0, self.current_time)
+            self.current_label, self._bad_posture_duration, self.current_time)
         return action
 
     def _update_recalibration(self, new_score: float, keypoints: dict):
